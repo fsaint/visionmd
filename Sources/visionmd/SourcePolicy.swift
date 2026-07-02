@@ -67,6 +67,12 @@ enum SourcePolicy {
         guard let layer = layerText?.trimmingCharacters(in: .whitespacesAndNewlines),
               !layer.isEmpty else { return .ocr }
 
+        // Some PDFs encode word gaps positionally with no space glyphs — the
+        // layer then reads "RELATEDDOCUMENTS". Similarity ignores whitespace,
+        // so guard explicitly: OCR sees the visual gaps; if the layer has far
+        // fewer spaces, its extraction is space-deficient → keep OCR.
+        if isSpaceDeficient(layer: layer, ocr: ocr) { return .ocr }
+
         let digitDense = isDigitDense(ocr) || isDigitDense(layer)
         let sim = TextSimilarity.similarity(layer, ocr)
 
@@ -89,6 +95,15 @@ enum SourcePolicy {
             return .layer(layer)
         }
         return .ocr
+    }
+
+    /// Layer text with less than half the OCR's word gaps → the PDF encodes
+    /// spacing positionally and PDFKit dropped it ("RELATEDDOCUMENTS").
+    static func isSpaceDeficient(layer: String, ocr: String) -> Bool {
+        let ocrSpaces = ocr.filter { $0 == " " }.count
+        guard ocrSpaces >= 2 else { return false }
+        let layerSpaces = layer.filter { $0 == " " }.count
+        return Double(layerSpaces) < Double(ocrSpaces) * 0.7
     }
 
     /// > 30% digits → treat as digit-dense (amounts, IDs, table cells).

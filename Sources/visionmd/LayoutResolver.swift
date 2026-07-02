@@ -207,7 +207,9 @@ enum LayoutResolver {
 
         let ok = !isFieldLabel && !isNonHeadingContent(trimmed)
         let level: Int?
-        if ok && ((ratio > 1.8 && isShortLine) || (ratio > 1.4 && isAllCaps)) {
+        // The all-caps H1 route needs substance: short fragments like "BALANCE"
+        // or "THIS PERIOD" are usually form/table column headers, not titles.
+        if ok && ((ratio > 1.8 && isShortLine) || (ratio > 1.4 && isAllCaps && charCount >= 12)) {
             level = 1
         } else if ok && ratio > 1.4 && isShortLine {
             level = 2
@@ -289,6 +291,17 @@ enum LayoutResolver {
 
         // Letter-sparse in a longer string → order/tracking number with a few letter prefixes
         if n >= 15 && Float(letters.count) / Float(n) < 0.05 { return true }
+
+        let lower = text.lowercased()
+
+        // Page furniture: "Page 4 of 5"
+        if lower.wholeMatch(of: /page\s+\d+\s+of\s+\d+/) != nil { return true }
+
+        // Address line ending in a ZIP code: "SPRINGFIELD, MA 01104"
+        if text.contains(","), lower.contains(/\s\d{5}(-\d{4})?$/) { return true }
+
+        // Activity/sheet ID codes: "SITE-1250", "SITS.1271", "A3.13B"
+        if lower.wholeMatch(of: /[a-z]{1,8}[-.]\d{2,6}[a-z)]?/) != nil { return true }
 
         return false
     }

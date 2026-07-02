@@ -365,6 +365,35 @@ struct SourcePolicyTests {
         #expect(SourcePolicy.isDigitDense("RFI #217 12/19/25"))
         #expect(!SourcePolicy.isDigitDense("Proposals were solicited from ten companies"))
     }
+
+    @Test("Space-deficient layer text rejected in favor of OCR")
+    func spaceDeficientLayer() {
+        // PDF layer with positional spacing dropped: "1.01 RELATEDDOCUMENTS"
+        let choice = SourcePolicy.chooseText(
+            ocr: "1.01 RELATED DOCUMENTS",
+            ocrConfidence: 0.95,
+            layerText: "1.01 RELATEDDOCUMENTS",
+            pageClass: .digital
+        )
+        #expect(choice == .ocr)
+
+        // Layer with normal spacing still accepted.
+        let ok = SourcePolicy.chooseText(
+            ocr: "1.01 RELATED DOCUMENTS",
+            ocrConfidence: 0.95,
+            layerText: "1.01 RELATED DOCUMENTS",
+            pageClass: .digital
+        )
+        #expect(ok == .layer("1.01 RELATED DOCUMENTS"))
+    }
+
+    @Test("isSpaceDeficient boundaries")
+    func spaceDeficientBounds() {
+        #expect(SourcePolicy.isSpaceDeficient(layer: "SOUNDBARRIERMULLIONTRIMCAP", ocr: "SOUND BARRIER MULLION TRIM CAP"))
+        #expect(!SourcePolicy.isSpaceDeficient(layer: "two words", ocr: "two words"))
+        // Under 2 OCR spaces → no signal, never triggers.
+        #expect(!SourcePolicy.isSpaceDeficient(layer: "oneword", ocr: "one word"))
+    }
 }
 
 // MARK: - Text similarity + cleaner (Phase 2)
@@ -739,6 +768,22 @@ struct PDFStructureExtractorTests {
                      "CONSTRUCTION STATUS", "ACTION"] {
             #expect(!LayoutResolver.isNonHeadingContent(text),
                     "Expected '\(text)' to pass non-heading guard")
+        }
+    }
+
+    @Test("Page furniture, addresses, and ID codes are not headings")
+    func furnitureAddressIDSuppression() {
+        for text in ["Page 4 of 5", "page 1 of 1",
+                     "SPRINGFIELD, MA 01104",
+                     "Great Barrington, Massachusetts 01230",
+                     "SITE-1250", "SITS.1271", "SITE-114)"] {
+            #expect(LayoutResolver.isNonHeadingContent(text),
+                    "Expected '\(text)' to be non-heading")
+        }
+        // Headings containing an inline number must still pass.
+        for text in ["CONSTRUCTION FIELD REPORT #24", "SECTION 09 8453", "Common Space Roof"] {
+            #expect(!LayoutResolver.isNonHeadingContent(text),
+                    "Expected '\(text)' to pass")
         }
     }
 
