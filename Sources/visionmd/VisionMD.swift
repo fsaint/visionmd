@@ -174,10 +174,15 @@ struct VisionMD: AsyncParsableCommand {
         }
 
         // Stage 6: Assemble Markdown output.
+        // Compute the assets-dir prefix relative to the output .md so figure
+        // links actually resolve (assets default to "<stem>_assets").
+        let assetsPrefix = relativePrefix(from: outputURL.deletingLastPathComponent(),
+                                          to: assetsDirURL)
         let mdOptions = MarkdownRenderer.Options(
             minConfidence: Float(minConfidence),
             emitHeadings: !noHeadings,
-            pageRules: pageRules
+            pageRules: pageRules,
+            assetsPrefix: assetsPrefix
         )
         let assemblyOptions = Assembler.Options(
             frontMatter: frontMatter,
@@ -290,6 +295,25 @@ struct VisionMD: AsyncParsableCommand {
                         .appendingPathComponent("\(stem)_assets")
     }
 
+    /// Relative path prefix from `base` dir to `target` dir ("" when equal,
+    /// "name" when target is a direct child, absolute path as fallback).
+    private func relativePrefix(from base: URL, to target: URL) -> String {
+        let baseComps = base.standardizedFileURL.pathComponents
+        let targetComps = target.standardizedFileURL.pathComponents
+        if baseComps == targetComps { return "" }
+        if targetComps.count == baseComps.count + 1,
+           Array(targetComps.prefix(baseComps.count)) == baseComps {
+            return targetComps.last!
+        }
+        // Not a simple child — build a ../-style relative path.
+        var common = 0
+        while common < min(baseComps.count, targetComps.count),
+              baseComps[common] == targetComps[common] { common += 1 }
+        let ups = Array(repeating: "..", count: baseComps.count - common)
+        let downs = targetComps[common...]
+        return (ups + downs).joined(separator: "/")
+    }
+
     private func resolveJsonURL(outputURL: URL, stem: String) -> URL? {
         if let p = emitJsonPath {
             return URL(fileURLWithPath: p)
@@ -332,7 +356,7 @@ enum Pipeline {
         var elements = LayoutResolver.resolve(
             raw,
             page: page,
-            minConfidence: options.minConfidence
+            tableMode: options.tableMode
         )
 
         // Hybrid text-layer reconciliation (§5.1)

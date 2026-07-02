@@ -168,7 +168,8 @@ enum Rasterizer {
         let contents = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.nameKey])
         let images = contents
             .filter { isImageExtension($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            // Numeric-aware sort so page10 sorts after page2.
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
         log("Directory has \(images.count) image(s)")
         var pages: [RasterizedPage] = []
@@ -191,12 +192,21 @@ enum Rasterizer {
 
     /// Extract the embedded text layer from a PDFPage. Returns nil if absent or garbled.
     static func extractTextLayer(pdfPage: PDFPage) -> String? {
-        guard let text = pdfPage.string, !text.isEmpty else { return nil }
-        // Heuristic: if >10% of characters are non-printable/replacement,
-        // treat the text layer as garbled OCR output and ignore it.
-        let total = text.unicodeScalars.count
-        let garbage = text.unicodeScalars.filter { $0.value == 0xFFFD || $0.value < 32 }.count
-        guard total > 0, CGFloat(garbage) / CGFloat(total) < 0.1 else { return nil }
+        guard let text = pdfPage.string, isUsableTextLayer(text) else { return nil }
         return text
+    }
+
+    /// Heuristic: a text layer is usable when < 10% of its scalars are
+    /// replacement chars or C0 controls. Whitespace controls (\n \r \t) are
+    /// normal text — counting them as garbage made short-line documents
+    /// (schedules, forms) lose their perfectly good layer.
+    static func isUsableTextLayer(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let whitespaceControls: Set<UInt32> = [0x09, 0x0A, 0x0D]
+        let total = text.unicodeScalars.count
+        let garbage = text.unicodeScalars.filter {
+            $0.value == 0xFFFD || ($0.value < 32 && !whitespaceControls.contains($0.value))
+        }.count
+        return CGFloat(garbage) / CGFloat(total) < 0.1
     }
 }

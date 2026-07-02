@@ -9,6 +9,9 @@ enum MarkdownRenderer {
         let minConfidence: Float
         let emitHeadings: Bool
         let pageRules: Bool
+        /// Directory prefix (relative to the output .md) for figure assets,
+        /// e.g. "report_assets". Empty = assets sit next to the .md.
+        var assetsPrefix: String = ""
     }
 
     // MARK: Page rendering
@@ -18,9 +21,11 @@ enum MarkdownRenderer {
         options: Options
     ) -> String {
         var parts: [String] = []
+        var tableOrdinal = 0
 
         for element in result.elements {
-            let md = renderElement(element, pageIndex: result.index, options: options)
+            if case .table = element { tableOrdinal += 1 }
+            let md = renderElement(element, pageIndex: result.index, tableOrdinal: tableOrdinal, options: options)
             if !md.isEmpty { parts.append(md) }
         }
 
@@ -32,6 +37,7 @@ enum MarkdownRenderer {
     static func renderElement(
         _ element: DocElement,
         pageIndex: Int,
+        tableOrdinal: Int = 1,
         options: Options
     ) -> String {
         switch element {
@@ -53,12 +59,18 @@ enum MarkdownRenderer {
             return renderList(ordered: ordered, items: items)
 
         case .table(let model, _, let conf):
-            let id = "t_p\(pageIndex + 1)"
+            // Same ID scheme as the sidecar (t_p<page>_<n>) so anchors match.
+            let id = "t_p\(pageIndex + 1)_\(tableOrdinal)"
             return TableRenderer.markdown(model, id: id, minConf: options.minConfidence, tableConf: conf)
 
-        case .figure(let relPath, _, let caption):
+        case .figure(let filename, _, let caption):
+            let path = options.assetsPrefix.isEmpty
+                ? filename
+                : "\(options.assetsPrefix)/\(filename)"
+            // Markdown URLs with spaces need angle brackets.
+            let target = path.contains(" ") ? "<\(path)>" : path
             let alt = caption ?? "figure"
-            var md = "![\(alt)](\(relPath))"
+            var md = "![\(alt)](\(target))"
             if let cap = caption {
                 md += "\n\n*\(cap)*"
             }
@@ -141,13 +153,19 @@ enum TableRenderer {
         guard t.rowCount > 0, t.colCount > 0 else { return "" }
         let grid = t.denseGrid()
 
-        // Detect numeric columns for right-alignment.
+        // Detect numeric columns for right-alignment: every non-empty cell is
+        // numeric AND at least one non-empty numeric cell exists (all-empty
+        // columns must not right-align).
         var numericCol = Array(repeating: true, count: t.colCount)
+        var hasNumeric = Array(repeating: false, count: t.colCount)
         for row in grid.dropFirst() {
-            for (c, cell) in row.enumerated() {
-                if !isNumeric(cell) { numericCol[c] = false }
+            for (c, cell) in row.enumerated() where c < t.colCount {
+                let trimmed = cell.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+                if isNumeric(trimmed) { hasNumeric[c] = true } else { numericCol[c] = false }
             }
         }
+        for c in 0..<t.colCount where !hasNumeric[c] { numericCol[c] = false }
 
         var lines: [String] = []
 
@@ -188,10 +206,8 @@ enum TableRenderer {
                     let rs = cell.rowSpan > 1 ? " rowspan=\"\(cell.rowSpan)\"" : ""
                     let cs = cell.colSpan > 1 ? " colspan=\"\(cell.colSpan)\"" : ""
                     let tag = r == 0 ? "th" : "td"
-                    let text = cell.text
+                    let text = escapeHTML(cell.text)
                         .replacingOccurrences(of: "\n", with: "<br>")
-                        .replacingOccurrences(of: "<", with: "&lt;")
-                        .replacingOccurrences(of: ">", with: "&gt;")
                     html += "    <\(tag)\(rs)\(cs)>\(text)</\(tag)>\n"
 
                     // Mark covered cells
@@ -213,14 +229,24 @@ enum TableRenderer {
     // MARK: Helpers
 
     static func escapeCell(_ s: String) -> String {
-        s.replacingOccurrences(of: "|", with: "\\|")
-         .replacingOccurrences(of: "\n", with: "<br>")
-         .trimmingCharacters(in: .whitespaces)
+        // Escape HTML entities FIRST, then insert <br> (order matters — the
+        // reverse destroys our own tags, producing literal &lt;br&gt;).
+        escapeHTML(s)
+            .replacingOccurrences(of: "|", with: "\\|")
+            .replacingOccurrences(of: "\n", with: "<br>")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Escape &, <, > — & first so we don't double-escape our own entities.
+    static func escapeHTML(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
     }
 
     private static func isNumeric(_ s: String) -> Bool {
         let t = s.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty else { return true }
+        guard !t.isEmpty else { return false }
         return Double(t.filter { $0 != "," && $0 != "%" && $0 != "$" }) != nil
     }
 }

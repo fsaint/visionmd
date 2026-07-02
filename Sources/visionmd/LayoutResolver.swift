@@ -14,30 +14,34 @@ enum LayoutResolver {
     static func resolve(
         _ raw: RawDocumentResult,
         page: RasterizedPage,
-        minConfidence: Float
+        tableMode: TableMode = .native
     ) -> [DocElement] {
         // Convert all bboxes from Vision space to internal (top-left, normalized).
         var elements: [DocElement] = []
 
         // Tables override their region; track them first so text inside is dropped later.
+        // With --tables off we skip table extraction AND the inside-table paragraph
+        // suppression (the text must surface as paragraphs instead).
         var tableRects: [CGRect] = []
 
-        for rt in raw.tables {
-            let region = Geometry.visionToInternal(rt.visionBBox)
-            let tm = TableModel(
-                rowCount: rt.rowCount,
-                colCount: rt.colCount,
-                cells: rt.cells.map {
-                    TableModel.Cell(
-                        row: $0.row, col: $0.col,
-                        rowSpan: $0.rowSpan, colSpan: $0.colSpan,
-                        text: $0.text, confidence: $0.confidence
-                    )
-                },
-                confidence: rt.confidence
-            )
-            elements.append(.table(tm, region: region, confidence: rt.confidence))
-            tableRects.append(region)
+        if tableMode == .native {
+            for rt in raw.tables {
+                let region = Geometry.visionToInternal(rt.visionBBox)
+                let tm = TableModel(
+                    rowCount: rt.rowCount,
+                    colCount: rt.colCount,
+                    cells: rt.cells.map {
+                        TableModel.Cell(
+                            row: $0.row, col: $0.col,
+                            rowSpan: $0.rowSpan, colSpan: $0.colSpan,
+                            text: $0.text, confidence: $0.confidence
+                        )
+                    },
+                    confidence: rt.confidence
+                )
+                elements.append(.table(tm, region: region, confidence: rt.confidence))
+                tableRects.append(region)
+            }
         }
 
         // Paragraphs — skip any fully inside a table region.

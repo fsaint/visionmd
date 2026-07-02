@@ -87,6 +87,9 @@ enum Recognizer {
                     ))
                 }
             }
+            // Iterating vt.rows yields a row-spanning cell once per row it spans —
+            // dedupe on grid origin so spans appear exactly once.
+            rawCells = dedupeCells(rawCells)
 
             let aggConf: Float = rawCells.isEmpty ? 0.5 :
                 rawCells.map(\.confidence).reduce(0, +) / Float(rawCells.count)
@@ -122,6 +125,15 @@ enum Recognizer {
     }
 
     // MARK: Helpers
+
+    /// Keep the first occurrence of each (row, col) grid origin.
+    static func dedupeCells(_ cells: [RawTable.RawCell]) -> [RawTable.RawCell] {
+        var seen = Set<Int>()
+        return cells.filter { cell in
+            let key = cell.row &* 10_000 &+ cell.col
+            return seen.insert(key).inserted
+        }
+    }
 
     /// Average confidence from an array of RecognizedTextObservation (text lines).
     private static func averageConfidence(_ lines: [RecognizedTextObservation]) -> Float {

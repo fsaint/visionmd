@@ -50,6 +50,154 @@ struct GeometryTests {
     }
 }
 
+// MARK: - Phase 1 correctness fixes
+
+@Suite("Phase1Fixes")
+struct Phase1FixTests {
+
+    @Test("escapeCell escapes HTML entities before inserting <br>")
+    func escapeCellOrder() {
+        let out = TableRenderer.escapeCell("a<b & c\nd")
+        #expect(out == "a&lt;b &amp; c<br>d")
+    }
+
+    @Test("escapeHTML escapes ampersand first")
+    func escapeHTMLAmpFirst() {
+        #expect(TableRenderer.escapeHTML("<&>") == "&lt;&amp;&gt;")
+    }
+
+    @Test("dedupeCells keeps one instance of a row-spanning cell")
+    func dedupeSpanningCells() {
+        let cells = [
+            RawTable.RawCell(row: 0, col: 0, rowSpan: 2, colSpan: 1, text: "span", confidence: 0.9),
+            RawTable.RawCell(row: 0, col: 1, rowSpan: 1, colSpan: 1, text: "b", confidence: 0.9),
+            RawTable.RawCell(row: 0, col: 0, rowSpan: 2, colSpan: 1, text: "span", confidence: 0.9), // dup from row 1
+            RawTable.RawCell(row: 1, col: 1, rowSpan: 1, colSpan: 1, text: "d", confidence: 0.9),
+        ]
+        let deduped = Recognizer.dedupeCells(cells)
+        #expect(deduped.count == 3)
+        #expect(deduped.filter { $0.text == "span" }.count == 1)
+    }
+
+    @Test("isUsableTextLayer ignores newlines and tabs")
+    func garbleCheckWhitespace() {
+        // Many newlines relative to text: a schedule-like layer. Must stay usable.
+        let text = String(repeating: "AB\n", count: 100)
+        #expect(Rasterizer.isUsableTextLayer(text))
+        // Genuinely garbled: >10% replacement chars.
+        let garbled = "AB\u{FFFD}\u{FFFD}\u{FFFD}"
+        #expect(!Rasterizer.isUsableTextLayer(garbled))
+    }
+
+    @Test("Figure rendering prepends assets prefix and brackets spaced paths")
+    func figureAssetPrefix() {
+        var opts = MarkdownRenderer.Options(minConfidence: 0.5, emitHeadings: true, pageRules: false)
+        opts.assetsPrefix = "my doc_assets"
+        let el = DocElement.figure(assetRelPath: "page-1-fig-1.png",
+                                   region: CGRect(x: 0, y: 0, width: 0.5, height: 0.3),
+                                   caption: nil)
+        let md = MarkdownRenderer.renderElement(el, pageIndex: 0, options: opts)
+        #expect(md == "![figure](<my doc_assets/page-1-fig-1.png>)")
+    }
+
+    @Test("Table anchors are per-table and match sidecar scheme")
+    func tableAnchorsMatchSidecar() {
+        let merged = TableModel(
+            rowCount: 2, colCount: 2,
+            cells: [TableModel.Cell(row: 0, col: 0, rowSpan: 2, colSpan: 1, text: "x", confidence: 0.9)],
+            confidence: 0.9
+        )
+        let result = PageResult(
+            index: 0,
+            pixelSize: CGSize(width: 100, height: 100),
+            elements: [
+                .table(merged, region: CGRect(x: 0, y: 0, width: 0.5, height: 0.2), confidence: 0.9),
+                .table(merged, region: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.2), confidence: 0.9),
+            ]
+        )
+        let opts = MarkdownRenderer.Options(minConfidence: 0.5, emitHeadings: true, pageRules: false)
+        let md = MarkdownRenderer.renderPage(result, options: opts)
+        #expect(md.contains("id=t_p1_1"))
+        #expect(md.contains("id=t_p1_2"))
+    }
+
+    @Test("tables off suppresses tables and surfaces inside text")
+    func tablesOffSurfacesText() {
+        let page = RasterizedPage(
+            index: 0, image: testCGImage(), pixelSize: CGSize(width: 100, height: 100),
+            pointSize: CGSize(width: 612, height: 792), dpi: 300,
+            pdfTextLayer: nil, fontInfo: nil
+        )
+        let tableBBox = CGRect(x: 0.1, y: 0.4, width: 0.8, height: 0.2)   // Vision space
+        let raw = RawDocumentResult(
+            paragraphs: [RawParagraph(text: "inside cell text",
+                                      visionBBox: tableBBox.insetBy(dx: 0.05, dy: 0.05),
+                                      confidence: 0.9, lineCount: 1)],
+            tables: [RawTable(rowCount: 1, colCount: 1,
+                              cells: [RawTable.RawCell(row: 0, col: 0, rowSpan: 1, colSpan: 1,
+                                                       text: "inside cell text", confidence: 0.9)],
+                              visionBBox: tableBBox, confidence: 0.9)],
+            lists: [], barcodes: []
+        )
+        let withTables = LayoutResolver.resolve(raw, page: page, tableMode: .native)
+        #expect(withTables.contains { if case .table = $0 { return true }; return false })
+        #expect(!withTables.contains { if case .paragraph = $0 { return true }; return false })
+
+        let without = LayoutResolver.resolve(raw, page: page, tableMode: .off)
+        #expect(!without.contains { if case .table = $0 { return true }; return false })
+        // The inside text must surface (as a paragraph or heading).
+        #expect(without.contains { el in
+            if case .paragraph = el { return true }
+            if case .heading = el { return true }
+            return false
+        })
+    }
+
+    @Test("Caption must be below the figure")
+    func captionBelowOnly() {
+        let fig = CGRect(x: 0.1, y: 0.3, width: 0.8, height: 0.3)   // bottom at 0.6
+        // Paragraph ABOVE the figure (would previously attach) — must not attach.
+        var els: [DocElement] = [
+            .figure(assetRelPath: "f.png", region: fig, caption: nil),
+            .paragraph(text: "Header text", region: CGRect(x: 0.1, y: 0.1, width: 0.5, height: 0.03), confidence: 0.9),
+        ]
+        FigureExtractor.associateCaptions(&els)
+        if case .figure(_, _, let cap) = els[0] { #expect(cap == nil) }
+
+        // Paragraph just below the figure — attaches.
+        var els2: [DocElement] = [
+            .figure(assetRelPath: "f.png", region: fig, caption: nil),
+            .paragraph(text: "Figure 3: Site plan", region: CGRect(x: 0.1, y: 0.61, width: 0.5, height: 0.03), confidence: 0.9),
+        ]
+        FigureExtractor.associateCaptions(&els2)
+        if case .figure(_, _, let cap) = els2[0] {
+            #expect(cap == "Figure 3: Site plan")
+        }
+        #expect(els2.count == 1)   // caption paragraph consumed
+    }
+
+    @Test("Caption pattern preferred over closer plain paragraph")
+    func captionPatternPreferred() {
+        let fig = CGRect(x: 0.1, y: 0.3, width: 0.8, height: 0.3)
+        var els: [DocElement] = [
+            .figure(assetRelPath: "f.png", region: fig, caption: nil),
+            .paragraph(text: "Some stray note", region: CGRect(x: 0.1, y: 0.605, width: 0.5, height: 0.02), confidence: 0.9),
+            .paragraph(text: "Table 2: Loads", region: CGRect(x: 0.1, y: 0.625, width: 0.5, height: 0.02), confidence: 0.9),
+        ]
+        FigureExtractor.associateCaptions(&els)
+        if case .figure(_, _, let cap) = els[0] {
+            #expect(cap == "Table 2: Loads")
+        }
+    }
+
+    private func testCGImage() -> CGImage {
+        let ctx = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8,
+                            bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return ctx.makeImage()!
+    }
+}
+
 // MARK: - Model tests
 
 @Suite("Model")
@@ -472,7 +620,7 @@ struct PDFStructureExtractorTests {
             )],
             tables: [], lists: [], barcodes: []
         )
-        let elements = LayoutResolver.resolve(raw, page: page, minConfidence: 0.5)
+        let elements = LayoutResolver.resolve(raw, page: page)
         let isHeading = elements.contains { if case .heading = $0 { return true }; return false }
         #expect(isHeading, "Heuristic should classify SECTION TITLE as heading when fontInfo is nil")
     }

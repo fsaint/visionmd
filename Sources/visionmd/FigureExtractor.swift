@@ -55,45 +55,61 @@ enum FigureExtractor {
                 continue
             }
 
-            // Store a relative path from the assets directory root.
-            let relPath = "assets/\(filename)"
-            results.append(.figure(assetRelPath: relPath, region: regionNorm, caption: nil))
+            // Store only the filename; MarkdownRenderer prepends the assets-dir
+            // prefix relative to the output .md location (fixes broken links when
+            // the assets dir is the default "<stem>_assets", not "assets/").
+            results.append(.figure(assetRelPath: filename, region: regionNorm, caption: nil))
         }
         return results
     }
 
     // MARK: Caption association
 
-    /// Scan elements after layout ordering: if a short paragraph immediately follows
-    /// a figure and is within 1.5 normalised line heights, assign it as caption.
+    /// Scan elements after layout ordering: a short paragraph that sits just BELOW
+    /// a figure (within an absolute window of 3% page height) becomes its caption.
+    /// Paragraphs starting with "Figure/Fig./Table/Chart" are preferred.
     static func associateCaptions(_ elements: inout [DocElement]) {
-        // Use explicit index management; we remove elements during iteration so
-        // a fixed `for i in 0..<count` range would go out-of-bounds after removal.
+        let window: CGFloat = 0.03   // absolute normalized window below the figure
+
         var i = 0
         while i < elements.count {
             guard case .figure(let path, let figRect, nil) = elements[i] else {
                 i += 1
                 continue
             }
-            let captionMaxY = figRect.maxY + figRect.height * 0.15   // ~1.5 line heights below
 
-            // Look at the next few elements for a candidate caption.
+            // Collect nearby paragraph candidates that are BELOW the figure and
+            // start within the window.
+            var candidates: [(index: Int, text: String, isCaptionLike: Bool)] = []
             var j = i + 1
             while j < min(i + 4, elements.count) {
-                if case .paragraph(let text, let pRect, _) = elements[j] {
-                    guard pRect.minY <= captionMaxY else { break }
-                    if text.count <= 200 {  // captions are short
-                        elements[i] = .figure(assetRelPath: path, region: figRect, caption: text)
-                        elements.remove(at: j)  // safe: we break immediately after
-                        break
-                    }
-                    j += 1
-                } else {
-                    break   // non-paragraph between figure and caption → stop looking
+                guard case .paragraph(let text, let pRect, _) = elements[j] else { break }
+                // Must start below the figure's bottom edge (small tolerance for
+                // bounding-box jitter) and within the caption window.
+                guard pRect.minY >= figRect.maxY - 0.005,
+                      pRect.minY <= figRect.maxY + window else { j += 1; continue }
+                if text.count <= 200 {
+                    candidates.append((j, text, isCaptionText(text)))
                 }
+                j += 1
+            }
+
+            // Prefer an explicit caption pattern; otherwise the closest short paragraph.
+            if let pick = candidates.first(where: \.isCaptionLike) ?? candidates.first {
+                elements[i] = .figure(assetRelPath: path, region: figRect, caption: pick.text)
+                elements.remove(at: pick.index)
             }
             i += 1
         }
+    }
+
+    /// True when text looks like an explicit figure/table caption.
+    static func isCaptionText(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespaces).lowercased()
+        for prefix in ["figure ", "fig.", "fig ", "table ", "chart "] {
+            if t.hasPrefix(prefix) { return true }
+        }
+        return false
     }
 
     // MARK: Filename helpers
