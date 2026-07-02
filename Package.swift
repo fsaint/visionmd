@@ -16,6 +16,10 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
         ),
+        .executableTarget(
+            name: "vmdpreview",
+            dependencies: []
+        ),
         .testTarget(
             name: "visionmdTests",
             dependencies: ["visionmd"]
