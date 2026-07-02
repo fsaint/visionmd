@@ -4,9 +4,20 @@
 
 `visionmd` is a Swift CLI that converts PDFs, scanned images, and image directories into structured Markdown using Apple Vision and PDFKit — no cloud, no API keys, no Python.
 
-```
+```bash
 swift run visionmd report.pdf --output report.md
 ```
+
+---
+
+## Tools
+
+This package ships two executables.
+
+| Binary | Purpose |
+|---|---|
+| `visionmd` | Convert PDF / image → Markdown |
+| `vmdpreview` | Side-by-side PDF + rendered Markdown viewer in the browser |
 
 ---
 
@@ -24,6 +35,7 @@ swift run visionmd report.pdf --output report.md
 | **Hybrid text layer** | PDFKit text layer used where available for sharper encoding; Vision for layout |
 | **Sidecar JSON** | Full structured output with bounding boxes, confidence scores, page metadata |
 | **Page range filtering** | `1-5,8,11-` syntax — process only what you need |
+| **Large-PDF stability** | Per-page autoreleasepool + capped concurrency (8 tasks) prevents SIGSEGV on 100+ page JBIG2 PDFs |
 
 ---
 
@@ -44,20 +56,21 @@ swift run visionmd report.pdf --output report.md
 git clone https://github.com/fsaint/visionmd.git
 cd visionmd
 swift build -c release
-# Binary at: .build/release/visionmd
+# Binaries at: .build/release/visionmd  and  .build/release/vmdpreview
 ```
 
 ### Add to your PATH
 
 ```bash
-sudo cp .build/release/visionmd /usr/local/bin/
+sudo cp .build/release/visionmd   /usr/local/bin/
+sudo cp .build/release/vmdpreview /usr/local/bin/
 ```
 
 ---
 
-## Usage
+## visionmd
 
-### Basic
+### Basic usage
 
 ```bash
 # PDF → Markdown
@@ -118,11 +131,41 @@ done
 
 ---
 
+## vmdpreview
+
+Side-by-side browser view: original PDF on the left, rendered Markdown on the right.
+
+```bash
+# Open a specific PDF + Markdown pair
+vmdpreview report.pdf report.md
+
+# Infer the .md path automatically (looks for report.md next to report.pdf)
+vmdpreview report.pdf
+
+# List all sample docs shipped with the repo
+vmdpreview --list
+
+# Open a sample doc by type — shows a numbered menu if multiple match
+vmdpreview --samples observations
+vmdpreview --samples spec
+vmdpreview --samples rfi
+```
+
+**Viewer features:**
+- Draggable divider — resize the split to any ratio
+- **Raw MD** toggle — flip between rendered and source Markdown
+- Word count in the toolbar
+- Page-break markers — `<!-- page N -->` comments render as visible dashed rules
+- Native macOS PDF viewer (full navigation and zoom controls)
+- Requires internet to load `marked.js` from CDN (renders without it, but unstyled)
+
+---
+
 ## Output format
 
 ### Headings
 
-For **digital PDFs** with an embedded font layer, headings are inferred from font-size ratios relative to the body text:
+For **digital PDFs** with an embedded font layer, headings are inferred from font-size ratios relative to the body text. Text with Vision confidence below 0.55 is never promoted to a heading (prevents garbled OCR from producing false structure).
 
 | Ratio vs body | Level |
 |---|---|
@@ -135,7 +178,7 @@ For **scanned PDFs and images**, a line-height heuristic is used as fallback.
 
 ### Tables
 
-GFM pipe tables with alignment. Merged cells are flattened with repeated content.
+Complex tables (merged cells, spanning headers) are emitted as raw HTML. Simple tables use GFM pipe syntax.
 
 ```markdown
 | Item | Qty | Unit Price | Total |
@@ -184,17 +227,20 @@ Input (PDF / image / directory)
         │
         ▼
   ┌─────────────┐
-  │  Rasterizer │  PDFKit → CGImage per page, extract text layer + font metadata
+  │  Rasterizer │  PDFKit → CGImage per page (autoreleasepool per page),
+  │             │  extract text layer + font metadata (PDFPageFontInfo)
   └──────┬──────┘
          │  RasterizedPage (CGImage + fontInfo + pdfTextLayer)
          ▼
   ┌─────────────┐
   │  Recognizer │  Apple Vision RecognizeDocumentsRequest → paragraphs, tables, lists, barcodes
+  │             │  (max 8 concurrent Vision tasks)
   └──────┬──────┘
          │  RawDocumentResult (Vision-space bounding boxes)
          ▼
   ┌────────────────┐
-  │ LayoutResolver │  Coordinate flip, column detection, reading order, heading inference
+  │ LayoutResolver │  Coordinate flip, column detection, reading order,
+  │                │  heading inference (font-size ratios + confidence gate)
   └──────┬─────────┘
          │  [DocElement] in reading order
          ▼
@@ -237,4 +283,4 @@ Issues and PRs welcome. Run the test suite with:
 swift test
 ```
 
-34 tests, zero dependencies beyond Apple's frameworks and `swift-argument-parser`.
+36 tests, zero dependencies beyond Apple's frameworks and `swift-argument-parser`.
