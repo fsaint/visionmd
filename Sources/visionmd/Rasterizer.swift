@@ -60,7 +60,13 @@ enum Rasterizer {
                 warn("Skipping page \(pageNumber): PDFKit returned nil")
                 continue
             }
-            let page = try rasterizePDFPage(pdfPage: pdfPage, index: i, dpi: dpi)
+            // Wrap each page in an autoreleasepool so PDFKit graphics contexts,
+            // attributedString caches, and JBIG2 decoder state are released
+            // promptly. Without this, 50+ page PDFs accumulate enough ObjC
+            // objects to trigger a SIGSEGV in CoreAnalytics/CoreGraphics.
+            let page = try autoreleasepool {
+                try rasterizePDFPage(pdfPage: pdfPage, index: i, dpi: dpi)
+            }
             pages.append(page)
         }
         return pages

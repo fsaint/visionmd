@@ -336,8 +336,20 @@ struct PDFStructureExtractorTests {
 
     @Test("Digit-heavy strings with letter prefix are not headings")
     func digitHeavySuppression() {
-        // Fax number like "F413.734.1881" — has letter F, but >65% digits
+        // Fax number: has letter F, but >65% digits
         #expect(LayoutResolver.isNonHeadingContent("F413.734.1881"))
+        // 20-char invoice ref — previously escaped n<20 check, now caught by n<=30
+        #expect(LayoutResolver.isNonHeadingContent("X5112300150102883054"))
+        // 25-char order ref
+        #expect(LayoutResolver.isNonHeadingContent("X51123001501028830541"))
+    }
+
+    @Test("Letter-sparse strings are not headings")
+    func letterSparseSuppression() {
+        // Order number with one letter in a long reference string
+        #expect(LayoutResolver.isNonHeadingContent("004397- 0003 01. 0005 - 2300000- 19250 0001D"))
+        // Barely passes the 15-char + <5% letter threshold
+        #expect(LayoutResolver.isNonHeadingContent("0043970000300050001D"))
     }
 
     @Test("Short strings under 6 chars are not headings")
@@ -375,6 +387,24 @@ struct PDFStructureExtractorTests {
             // expected — phone number suppressed
         } else {
             Issue.record("Expected paragraph for phone number, got \(el)")
+        }
+    }
+
+    @Test("Low-confidence text is never promoted to heading")
+    func lowConfidenceNotHeading() {
+        let fontInfo = PDFPageFontInfo(
+            runs: [PDFTextRun(text: "INVOICE", fontSize: 24, fontName: "Helvetica-Bold", isBold: true, isItalic: false)],
+            bodyFontSize: 10
+        )
+        // ratio = 2.4 → would normally be H1, but confidence < 0.55 gates it
+        let el = LayoutResolver.classifyByFontSize(
+            text: "INVOICE",
+            region: CGRect(x: 0.1, y: 0.05, width: 0.3, height: 0.04),
+            confidence: 0.40,
+            fontInfo: fontInfo
+        )
+        if case .paragraph = el { /* expected */ } else {
+            Issue.record("Expected paragraph for low-confidence text, got \(el)")
         }
     }
 

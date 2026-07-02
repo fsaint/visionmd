@@ -136,21 +136,34 @@ struct VisionMD: AsyncParsableCommand {
             hashAssets: hashAssets
         )
 
+        // Cap concurrent Vision requests: launching too many simultaneously on
+        // large PDFs causes SIGSEGV in CoreAnalytics/CoreGraphics (JBIG2 decoder
+        // state accumulates). 8 concurrent tasks saturates Apple Silicon without
+        // triggering framework crashes.
+        let maxConcurrency = 8
         results = try await withThrowingTaskGroup(of: PageResult?.self) { group in
-            for page in rasterized {
-                group.addTask {
-                    do {
-                        return try await Pipeline.process(page, options: opts)
-                    } catch {
-                        warn("Page \(page.index + 1) failed: \(error) — skipped")
-                        return nil
+            var iterator = rasterized.makeIterator()
+
+            // Seed up to maxConcurrency initial tasks.
+            for _ in 0..<min(maxConcurrency, rasterized.count) {
+                if let page = iterator.next() {
+                    group.addTask {
+                        do { return try await Pipeline.process(page, options: opts) }
+                        catch { warn("Page \(page.index + 1) failed: \(error) — skipped"); return nil }
                     }
                 }
             }
+
+            // Drain: for each finished task, start the next pending page.
             var collected: [PageResult] = []
             for try await result in group {
-                if let r = result { collected.append(r) }
-                else { partialFailure = true }
+                if let r = result { collected.append(r) } else { partialFailure = true }
+                if let page = iterator.next() {
+                    group.addTask {
+                        do { return try await Pipeline.process(page, options: opts) }
+                        catch { warn("Page \(page.index + 1) failed: \(error) — skipped"); return nil }
+                    }
+                }
             }
             return collected.sorted { $0.index < $1.index }
         }

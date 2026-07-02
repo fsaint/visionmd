@@ -4,3 +4,5 @@
 *.swp
 .DS_Store
 Package.resolved
+sample_pdfs/
+sample_output/

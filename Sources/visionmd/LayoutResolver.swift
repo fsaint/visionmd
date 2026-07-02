@@ -149,6 +149,12 @@ enum LayoutResolver {
         lineCount: Int,
         page: RasterizedPage
     ) -> DocElement {
+        // Garbled OCR produces false headings. Require a minimum confidence
+        // before even attempting heading promotion on either path.
+        guard confidence >= 0.55 else {
+            return .paragraph(text: text, region: region, confidence: confidence)
+        }
+
         // Use precise font-size classification when PDF font metadata is available.
         if let fontInfo = page.fontInfo {
             return classifyByFontSize(text: text, region: region, confidence: confidence, fontInfo: fontInfo)
@@ -198,6 +204,9 @@ enum LayoutResolver {
         confidence: Float,
         fontInfo: PDFPageFontInfo
     ) -> DocElement {
+        guard confidence >= 0.55 else {
+            return .paragraph(text: text, region: region, confidence: confidence)
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let charCount = trimmed.count
         let isShortLine = charCount > 0 && charCount < 80
@@ -232,7 +241,10 @@ enum LayoutResolver {
     /// Blocks:
     ///  - Strings shorter than 6 characters (dates like "005", status like "TBD")
     ///  - Pure-numeric strings (dates, phone numbers, project numbers, amounts)
-    ///  - Digit-heavy strings (>65% digits, < 20 chars — fax "F413.734.1881")
+    ///  - Digit-heavy strings (>65% digits, ≤ 30 chars — fax "F413.734.1881",
+    ///    invoice refs "X5112300150102883054")
+    ///  - Letter-sparse strings (< 5% letters, ≥ 15 chars — order numbers like
+    ///    "004397- 0003 01. 0005 - 2300000- 19250 0001D 30290000104")
     static func isNonHeadingContent(_ text: String) -> Bool {
         let n = text.count
         guard n >= 6 else { return true }
@@ -243,9 +255,12 @@ enum LayoutResolver {
         // No letters + has at least one digit → numeric (date, phone, year, amount)
         if letters.isEmpty && !digits.isEmpty { return true }
 
-        // Digit-heavy (>65%) + short → phone/fax number with a letter prefix
-        if n < 20 && !digits.isEmpty &&
+        // Digit-heavy (>65%) + short-to-medium → phone/fax number or invoice ref
+        if n <= 30 && !digits.isEmpty &&
             Float(digits.count) / Float(n) > 0.65 { return true }
+
+        // Letter-sparse in a longer string → order/tracking number with a few letter prefixes
+        if n >= 15 && Float(letters.count) / Float(n) < 0.05 { return true }
 
         return false
     }
