@@ -66,8 +66,34 @@ enum LayoutResolver {
         }
 
         elements = demoteHeadingRows(elements)
+        elements = capHeadingsOnFormPages(elements)
 
         return order(elements, page: page)
+    }
+
+    /// Pages dominated by digit-dense text (G703 continuation sheets, invoices)
+    /// are forms — their large text is form chrome, not document structure.
+    /// Cap heading level at H3 on such pages.
+    static func capHeadingsOnFormPages(_ elements: [DocElement]) -> [DocElement] {
+        var textual = 0
+        var digitDense = 0
+        for el in elements {
+            switch el {
+            case .paragraph(let t, _, _), .heading(_, let t, _, _):
+                textual += 1
+                if SourcePolicy.isDigitDense(t) { digitDense += 1 }
+            default:
+                break
+            }
+        }
+        guard digitDense >= 8, textual > 0,
+              Double(digitDense) / Double(textual) >= 0.4 else { return elements }
+
+        return elements.map { el in
+            guard case .heading(let level, let text, let region, let conf) = el,
+                  level < 3 else { return el }
+            return .heading(level: 3, text: text, region: region, confidence: conf)
+        }
     }
 
     /// Three or more headings sharing one horizontal band that spans most of
@@ -90,11 +116,22 @@ enum LayoutResolver {
         }
 
         var demote = Set<Int>()
-        for band in bands where band.indices.count >= 3 {
+        for band in bands where band.indices.count >= 2 {
             let rects = band.indices.map { elements[$0].region }
             let spread = rects.map(\.maxX).max()! - rects.map(\.minX).min()!
-            if spread >= 0.45 {
+            guard spread >= 0.45 else { continue }
+
+            if band.indices.count >= 3 {
                 demote.formUnion(band.indices)
+            } else {
+                // Pairs qualify only with the column-label signature: both
+                // short and all-caps ("THIS PERIOD" | "BALANCE"). Mixed-case
+                // pairs like "Chapter 1" | "Appendix" survive.
+                let allColumnLabels = band.indices.allSatisfy { i in
+                    guard case .heading(_, let t, _, _) = elements[i] else { return false }
+                    return t.count < 16 && t == t.uppercased()
+                }
+                if allColumnLabels { demote.formUnion(band.indices) }
             }
         }
         guard !demote.isEmpty else { return elements }

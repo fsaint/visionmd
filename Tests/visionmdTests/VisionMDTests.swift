@@ -245,6 +245,17 @@ struct HeadingRowTests {
         #expect(headings.isEmpty)
     }
 
+    @Test("Wide pair of short all-caps labels demoted")
+    func allCapsPairDemoted() {
+        let els = [
+            heading("THIS PERIOD", x: 0.2, y: 0.2),
+            heading("BALANCE", x: 0.8, y: 0.2),
+        ]
+        let out = LayoutResolver.demoteHeadingRows(els)
+        let headings = out.filter { if case .heading = $0 { return true }; return false }
+        #expect(headings.isEmpty)
+    }
+
     @Test("Left-aligned narrow heading stack survives (daily report sections)")
     func narrowStackSurvives() {
         // Sections at the same left edge, vertically close — NOT a table row.
@@ -256,6 +267,42 @@ struct HeadingRowTests {
         let out = LayoutResolver.demoteHeadingRows(els)
         let headings = out.filter { if case .heading = $0 { return true }; return false }
         #expect(headings.count == 3)
+    }
+
+    @Test("Digit-dominated form page caps headings at H3")
+    func formPageCapsHeadings() {
+        var els: [DocElement] = [
+            .heading(level: 1, text: "CONTINUATION SHEET",
+                     region: CGRect(x: 0.3, y: 0.03, width: 0.4, height: 0.03), confidence: 0.9),
+        ]
+        for i in 0..<10 {
+            els.append(.paragraph(text: "$\(i),492,395.0\(i)",
+                                  region: CGRect(x: 0.1, y: 0.2 + CGFloat(i) * 0.05, width: 0.2, height: 0.02),
+                                  confidence: 0.9))
+        }
+        let out = LayoutResolver.capHeadingsOnFormPages(els)
+        if case .heading(let level, _, _, _) = out[0] {
+            #expect(level == 3)
+        } else {
+            Issue.record("heading disappeared")
+        }
+    }
+
+    @Test("Prose page keeps H1")
+    func prosePageKeepsH1() {
+        var els: [DocElement] = [
+            .heading(level: 1, text: "SECTION 09 8453",
+                     region: CGRect(x: 0.3, y: 0.03, width: 0.4, height: 0.03), confidence: 0.9),
+        ]
+        for i in 0..<10 {
+            els.append(.paragraph(text: "Drawings and general provisions of the Contract apply.",
+                                  region: CGRect(x: 0.1, y: 0.2 + CGFloat(i) * 0.05, width: 0.7, height: 0.02),
+                                  confidence: 0.9))
+        }
+        let out = LayoutResolver.capHeadingsOnFormPages(els)
+        if case .heading(let level, _, _, _) = out[0] {
+            #expect(level == 1)
+        }
     }
 }
 
