@@ -65,7 +65,38 @@ enum LayoutResolver {
             elements.append(.barcode(payload: rb.payload, symbology: rb.symbology, region: region))
         }
 
+        elements = demoteHeadingRows(elements)
+
         return order(elements, page: page)
+    }
+
+    /// Three or more headings sharing one horizontal band are a table header
+    /// row Vision failed to detect as a table (G703 column headers: "THIS
+    /// PERIOD" | "BALANCE" | "STORED") — demote them all to paragraphs.
+    static func demoteHeadingRows(_ elements: [DocElement]) -> [DocElement] {
+        // Collect heading indices grouped by y-center band.
+        var bands: [(midY: CGFloat, indices: [Int])] = []
+        for (i, el) in elements.enumerated() {
+            guard case .heading = el else { continue }
+            let y = el.region.midY
+            if let bi = bands.firstIndex(where: { abs($0.midY - y) <= 0.012 }) {
+                bands[bi].indices.append(i)
+            } else {
+                bands.append((y, [i]))
+            }
+        }
+
+        var demote = Set<Int>()
+        for band in bands where band.indices.count >= 3 {
+            demote.formUnion(band.indices)
+        }
+        guard !demote.isEmpty else { return elements }
+
+        return elements.enumerated().map { i, el in
+            guard demote.contains(i),
+                  case .heading(_, let text, let region, let conf) = el else { return el }
+            return .paragraph(text: text, region: region, confidence: conf)
+        }
     }
 
     // MARK: Reading order

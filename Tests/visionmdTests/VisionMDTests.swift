@@ -198,6 +198,41 @@ struct Phase1FixTests {
     }
 }
 
+// MARK: - Heading-row demotion
+
+@Suite("HeadingRows")
+struct HeadingRowTests {
+
+    private func heading(_ text: String, x: CGFloat, y: CGFloat) -> DocElement {
+        .heading(level: 1, text: text, region: CGRect(x: x, y: y, width: 0.15, height: 0.02), confidence: 0.9)
+    }
+
+    @Test("Row of 3+ headings demoted to paragraphs")
+    func headerRowDemoted() {
+        let els = [
+            heading("THIS PERIOD", x: 0.1, y: 0.20),
+            heading("BALANCE", x: 0.4, y: 0.205),
+            heading("STORED", x: 0.7, y: 0.198),
+            heading("Real Title", x: 0.1, y: 0.05),
+        ]
+        let out = LayoutResolver.demoteHeadingRows(els)
+        let headings = out.filter { if case .heading = $0 { return true }; return false }
+        #expect(headings.count == 1)
+        if case .heading(_, let t, _, _) = headings[0] { #expect(t == "Real Title") }
+    }
+
+    @Test("Two headings on one line survive")
+    func pairSurvives() {
+        let els = [
+            heading("Chapter 1", x: 0.1, y: 0.1),
+            heading("Appendix", x: 0.6, y: 0.1),
+        ]
+        let out = LayoutResolver.demoteHeadingRows(els)
+        let headings = out.filter { if case .heading = $0 { return true }; return false }
+        #expect(headings.count == 2)
+    }
+}
+
 // MARK: - Document refinement (Phase 4)
 
 @Suite("DocumentRefiner")
