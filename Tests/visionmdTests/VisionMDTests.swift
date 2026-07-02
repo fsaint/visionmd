@@ -231,6 +231,32 @@ struct HeadingRowTests {
         let headings = out.filter { if case .heading = $0 { return true }; return false }
         #expect(headings.count == 2)
     }
+
+    @Test("Stacked two-line column headers demoted")
+    func stackedHeadersDemoted() {
+        // G703: "WORK COMPLETED" sits a line above "THIS PERIOD"/"BALANCE".
+        let els = [
+            heading("WORK COMPLETED", x: 0.30, y: 0.180),
+            heading("THIS PERIOD", x: 0.45, y: 0.205),
+            heading("BALANCE", x: 0.80, y: 0.205),
+        ]
+        let out = LayoutResolver.demoteHeadingRows(els)
+        let headings = out.filter { if case .heading = $0 { return true }; return false }
+        #expect(headings.isEmpty)
+    }
+
+    @Test("Left-aligned narrow heading stack survives (daily report sections)")
+    func narrowStackSurvives() {
+        // Sections at the same left edge, vertically close — NOT a table row.
+        let els = [
+            heading("DELIVERIES", x: 0.05, y: 0.30),
+            heading("QUANTITIES", x: 0.05, y: 0.32),
+            heading("DELAYS", x: 0.05, y: 0.34),
+        ]
+        let out = LayoutResolver.demoteHeadingRows(els)
+        let headings = out.filter { if case .heading = $0 { return true }; return false }
+        #expect(headings.count == 3)
+    }
 }
 
 // MARK: - Document refinement (Phase 4)

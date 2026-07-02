@@ -14,11 +14,16 @@ swift build -c release --product visionmd
 ```
 
 ### 2. Re-process all sample PDFs
+Vision/CoreGraphics occasionally SIGSEGVs (exit 139) nondeterministically
+(~1 in 60 conversions) — always retry a failed conversion once before
+reporting it as a failure.
 ```bash
 BIN=.build/release/visionmd
 for pdf in sample_pdfs/*.pdf; do
   stem=$(basename "$pdf" .pdf)
-  "$BIN" "$pdf" --output "sample_output/${stem}.md" --quiet 2>/dev/null
+  "$BIN" "$pdf" --output "sample_output/${stem}.md" --quiet 2>/dev/null \
+    || "$BIN" "$pdf" --output "sample_output/${stem}.md" --quiet 2>/dev/null \
+    || echo "FAILED twice: $stem"
   echo "✓ $stem"
 done
 ```
