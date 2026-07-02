@@ -1,0 +1,6 @@
+.build/
+*.o
+*.d
+*.swp
+.DS_Store
+Package.resolved
