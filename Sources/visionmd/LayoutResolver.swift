@@ -70,37 +70,61 @@ enum LayoutResolver {
 
     // MARK: Reading order
 
-    /// Sort elements into newspaper reading order: detect columns, then sort by (col, Y, X).
+    /// Sort elements into newspaper reading order using vertical banding:
+    /// full-width elements split the page into horizontal bands; column
+    /// detection runs per band; bands emit top to bottom. This keeps footers
+    /// last and figures mid-page (the old full-width-first sort hoisted them).
     static func order(_ elements: [DocElement], page: RasterizedPage) -> [DocElement] {
         guard !elements.isEmpty else { return elements }
 
         let fullWidthThreshold: CGFloat = 0.8
+
+        // Sort everything by top edge first.
+        let byY = elements.sorted { $0.region.minY < $1.region.minY }
+
+        // Full-width elements are band separators; group the rest between them.
+        struct Band {
+            var separator: DocElement?   // the full-width element opening the band
+            var members: [DocElement] = []
+        }
+        var bands: [Band] = [Band(separator: nil)]
+        for el in byY {
+            if el.region.width >= fullWidthThreshold {
+                bands.append(Band(separator: el))
+            } else {
+                bands[bands.count - 1].members.append(el)
+            }
+        }
+
+        var result: [DocElement] = []
+        for band in bands {
+            if let sep = band.separator { result.append(sep) }
+            result.append(contentsOf: orderWithinBand(band.members))
+        }
+        return result
+    }
+
+    /// Column-then-position ordering for the elements of one band.
+    private static func orderWithinBand(_ elements: [DocElement]) -> [DocElement] {
+        guard elements.count > 1 else { return elements }
         let columns = detectColumns(elements)
 
-        // Assign each element a column index (-1 for full-width breaks).
         struct Ranked {
             let element: DocElement
             let col: Int
             let y: CGFloat
             let x: CGFloat
         }
-
         var ranked: [Ranked] = elements.map { el in
             let r = el.region
-            if r.width >= fullWidthThreshold {
-                return Ranked(element: el, col: -1, y: r.minY, x: r.minX)
-            }
-            let cx = r.midX
-            let col = columns.firstIndex { $0.contains(cx) } ?? 0
+            let col = columns.firstIndex { $0.contains(r.midX) } ?? 0
             return Ranked(element: el, col: col, y: r.minY, x: r.minX)
         }
-
         ranked.sort {
             if $0.col != $1.col { return $0.col < $1.col }
             if abs($0.y - $1.y) > 0.005 { return $0.y < $1.y }
             return $0.x < $1.x
         }
-
         return ranked.map(\.element)
     }
 

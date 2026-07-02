@@ -198,6 +198,61 @@ struct Phase1FixTests {
     }
 }
 
+// MARK: - Reading order (Phase 3)
+
+@Suite("ReadingOrder")
+struct ReadingOrderTests {
+
+    private func page() -> RasterizedPage {
+        let ctx = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8,
+                            bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return RasterizedPage(index: 0, image: ctx.makeImage()!,
+                              pixelSize: CGSize(width: 100, height: 100),
+                              pointSize: CGSize(width: 612, height: 792), dpi: 300,
+                              pdfTextLayer: nil, fontInfo: nil)
+    }
+
+    private func para(_ text: String, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat = 0.05) -> DocElement {
+        .paragraph(text: text, region: CGRect(x: x, y: y, width: w, height: h), confidence: 0.9)
+    }
+
+    private func texts(_ els: [DocElement]) -> [String] {
+        els.compactMap { if case .paragraph(let t, _, _) = $0 { return t }; return nil }
+    }
+
+    @Test("Footer sorts last, title first, columns in between")
+    func titleColumnsFooter() {
+        let els = [
+            para("footer", x: 0.05, y: 0.93, w: 0.9),     // full-width bottom
+            para("left-1", x: 0.05, y: 0.2, w: 0.4),
+            para("right-1", x: 0.55, y: 0.2, w: 0.4),
+            para("title", x: 0.05, y: 0.05, w: 0.9),      // full-width top
+            para("left-2", x: 0.05, y: 0.4, w: 0.4),
+            para("right-2", x: 0.55, y: 0.4, w: 0.4),
+        ]
+        let ordered = texts(LayoutResolver.order(els, page: page()))
+        #expect(ordered == ["title", "left-1", "left-2", "right-1", "right-2", "footer"])
+    }
+
+    @Test("Full-width figure mid-page stays mid-page")
+    func figureStaysMidPage() {
+        let fig = DocElement.figure(assetRelPath: "f.png",
+                                    region: CGRect(x: 0.05, y: 0.45, width: 0.9, height: 0.2),
+                                    caption: nil)
+        let els: [DocElement] = [
+            para("above", x: 0.1, y: 0.1, w: 0.5),
+            fig,
+            para("below", x: 0.1, y: 0.75, w: 0.5),
+        ]
+        let ordered = LayoutResolver.order(els, page: page())
+        // Expect: above, figure, below — the old sort hoisted the figure to the top.
+        if case .paragraph(let t, _, _) = ordered[0] { #expect(t == "above") }
+        if case .figure = ordered[1] {} else { Issue.record("figure not mid-sequence: \(ordered)") }
+        if case .paragraph(let t, _, _) = ordered[2] { #expect(t == "below") }
+    }
+}
+
 // MARK: - Source policy (Phase 2)
 
 @Suite("SourcePolicy")
