@@ -16,14 +16,136 @@ let cliArgs = CommandLine.arguments.dropFirst()
 func usage() -> Never {
     fputs("""
     Usage: vmdpreview <input.pdf> [input.md]
+           vmdpreview --samples [<doc-type>]
+           vmdpreview --list
 
     Options:
-      -h, --help    Show this help
+      -h, --help              Show this help
+      --samples [<type>]      Open a sample doc (bulletin, contract, daily_report,
+                              drawing_sheet, drawings, four_wla, observations,
+                              pay_application, rfi, spec, submittal)
+      --list                  List available sample docs
 
     If input.md is omitted, <input-stem>.md is tried automatically.
     Run visionmd on the PDF first to generate the Markdown.\n
     """, stderr)
     exit(1)
+}
+
+// MARK: - Sample-docs mode
+
+/// Locate the sample_pdfs directory relative to this binary's package root.
+func sampleDir() -> URL? {
+    // Walk up from the binary until we find sample_pdfs/
+    var dir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
+    for _ in 0..<8 {
+        let candidate = dir.appendingPathComponent("sample_pdfs")
+        if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        dir = dir.deletingLastPathComponent()
+    }
+    return nil
+}
+
+func listSamples() {
+    guard let dir = sampleDir() else {
+        fputs("sample_pdfs/ not found (run from the package root or install the binary there).\n", stderr)
+        exit(1)
+    }
+    let pdfs = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+        .filter { $0.pathExtension.lowercased() == "pdf" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+    print("Available sample docs (\(pdfs.count)):")
+    for (i, p) in pdfs.enumerated() {
+        print("  \(i + 1). \(p.deletingPathExtension().lastPathComponent)")
+    }
+}
+
+func openSample(type: String?) {
+    guard let dir = sampleDir() else {
+        fputs("sample_pdfs/ not found.\n", stderr)
+        exit(1)
+    }
+    let outDir = dir.deletingLastPathComponent().appendingPathComponent("sample_output")
+    let allPDFs = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+        .filter { $0.pathExtension.lowercased() == "pdf" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+
+    let filtered: [URL]
+    if let t = type, !t.isEmpty {
+        filtered = allPDFs.filter { $0.lastPathComponent.hasPrefix(t) }
+    } else {
+        filtered = allPDFs
+    }
+
+    guard !filtered.isEmpty else {
+        fputs("No sample docs found for type '\(type ?? "")'.\n", stderr)
+        fputs("Available types: \(allPDFs.map { $0.lastPathComponent.components(separatedBy: "__").first ?? "" }.reduce(into: Set<String>()) { $0.insert($1) }.sorted().joined(separator: ", "))\n", stderr)
+        exit(1)
+    }
+
+    if filtered.count == 1 {
+        let pdf = filtered[0]
+        let md = outDir.appendingPathComponent(pdf.deletingPathExtension().lastPathComponent + ".md")
+        openPair(pdfURL: pdf, mdURL: md)
+        return
+    }
+
+    // Multiple matches — print a numbered menu
+    print("Select a sample doc:")
+    for (i, p) in filtered.enumerated() {
+        print("  \(i + 1). \(p.deletingPathExtension().lastPathComponent)")
+    }
+    print("Enter number (1–\(filtered.count)): ", terminator: "")
+    if let line = readLine(), let n = Int(line), n >= 1, n <= filtered.count {
+        let pdf = filtered[n - 1]
+        let md = outDir.appendingPathComponent(pdf.deletingPathExtension().lastPathComponent + ".md")
+        openPair(pdfURL: pdf, mdURL: md)
+    } else {
+        fputs("Invalid selection.\n", stderr)
+        exit(1)
+    }
+}
+
+func openPair(pdfURL: URL, mdURL: URL) {
+    guard FileManager.default.fileExists(atPath: pdfURL.path) else {
+        fputs("PDF not found: \(pdfURL.path)\n", stderr)
+        exit(1)
+    }
+    var mdContent = ""
+    if FileManager.default.fileExists(atPath: mdURL.path),
+       let text = try? String(contentsOf: mdURL, encoding: .utf8), !text.isEmpty {
+        mdContent = text
+    } else {
+        mdContent = "> **No Markdown file found.** Run `visionmd \"\(pdfURL.lastPathComponent)\"` first."
+        fputs("Warning: \(mdURL.lastPathComponent) not found — showing placeholder.\n", stderr)
+    }
+    let previewDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vmdpreview-\(pdfURL.deletingPathExtension().lastPathComponent)")
+    try? FileManager.default.createDirectory(at: previewDir, withIntermediateDirectories: true)
+    let pdfDest = previewDir.appendingPathComponent("doc.pdf")
+    try? FileManager.default.removeItem(at: pdfDest)
+    try? FileManager.default.copyItem(at: pdfURL, to: pdfDest)
+    let htmlDest = previewDir.appendingPathComponent("index.html")
+    let html = buildHTML(title: pdfURL.deletingPathExtension().lastPathComponent, markdown: mdContent)
+    try? html.write(to: htmlDest, atomically: true, encoding: .utf8)
+    NSWorkspace.shared.open(htmlDest)
+    print("Preview: \(htmlDest.path)")
+    exit(0)
+}
+
+// MARK: - Dispatch
+
+if cliArgs.contains("--list") {
+    listSamples()
+    exit(0)
+}
+
+if cliArgs.contains("--samples") {
+    let idx = cliArgs.firstIndex(of: "--samples")!
+    let next = cliArgs.index(after: idx)
+    let docType: String? = next < cliArgs.endIndex && !cliArgs[next].hasPrefix("-") ? String(cliArgs[next]) : nil
+    openSample(type: docType)
+    // openSample calls exit(0) internally
 }
 
 if cliArgs.contains("-h") || cliArgs.contains("--help") || cliArgs.isEmpty { usage() }
