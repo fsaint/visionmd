@@ -87,11 +87,45 @@ struct RasterizedPage: Sendable {
     let pointSize: CGSize   // PDF mediaBox in 72-dpi point units
     let dpi: CGFloat
     /// Text extracted from the PDF text layer (nil for image inputs or when unavailable).
-    /// Used by HybridReconciler; empty/garbled strings are treated as absent.
+    /// Empty/garbled strings are treated as absent.
     let pdfTextLayer: String?
     /// Font metadata extracted from PDFPage.attributedString.
     /// nil for image inputs and scanned PDFs (no readable text layer).
     let fontInfo: PDFPageFontInfo?
+    /// Positioned text runs from the PDF layer, rects in internal-normalized
+    /// (top-left) space. Empty for image inputs and scanned PDFs.
+    var positionedRuns: [PositionedTextRun] = []
+    /// Static page signals for source-policy classification (nil for images).
+    var signals: PageSignals? = nil
+}
+
+/// A text run from the PDF layer with its position on the page.
+/// One run per visual line (font runs spanning lines are split).
+struct PositionedTextRun: Sendable {
+    let text: String
+    /// Internal-normalized rect (top-left origin, [0,1]).
+    let rect: CGRect
+    let fontSize: CGFloat
+    let fontName: String
+    let isBold: Bool
+    let isItalic: Bool
+}
+
+/// Static per-page signals computed during Stage 1 (all PDFKit access up front).
+struct PageSignals: Sendable {
+    let hasTextLayer: Bool      // usable (non-garbled) layer present
+    let garbleRatio: CGFloat    // U+FFFD + C0 controls (excl. \n\r\t) / total
+    let layerCharCount: Int     // usable layer character count
+    let fullPageImage: Bool     // an image XObject big enough to cover the page
+    let hasFontInfo: Bool       // attributedString produced usable font runs
+}
+
+/// How a page is served by the source-selection policy.
+enum PageClass: String, Sendable {
+    case digital                // text from PDF layer per-region; OCR fills gaps
+    case scannedWithOCRLayer    // someone else's OCR in the layer — trust less
+    case scanned                // OCR only
+    case mixed                  // usable layer covering only part of the page
 }
 
 // MARK: - PDF structural types

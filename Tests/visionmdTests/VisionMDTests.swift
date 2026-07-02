@@ -198,6 +198,176 @@ struct Phase1FixTests {
     }
 }
 
+// MARK: - Source policy (Phase 2)
+
+@Suite("SourcePolicy")
+struct SourcePolicyTests {
+
+    private func signals(
+        hasLayer: Bool = true, garble: CGFloat = 0.0, chars: Int = 1000,
+        fullImage: Bool = false, fontInfo: Bool = true
+    ) -> PageSignals {
+        PageSignals(hasTextLayer: hasLayer, garbleRatio: garble,
+                    layerCharCount: chars, fullPageImage: fullImage,
+                    hasFontInfo: fontInfo)
+    }
+
+    @Test("Digital page classification")
+    func classifyDigital() {
+        #expect(SourcePolicy.classify(signals: signals(), ocrCharCount: 1000) == .digital)
+    }
+
+    @Test("Scanned: no usable layer")
+    func classifyScanned() {
+        #expect(SourcePolicy.classify(signals: signals(hasLayer: false, chars: 0), ocrCharCount: 500) == .scanned)
+        #expect(SourcePolicy.classify(signals: signals(garble: 0.2), ocrCharCount: 500) == .scanned)
+    }
+
+    @Test("Scanned with OCR layer: full-page image + layer")
+    func classifyScannedOCRLayer() {
+        #expect(SourcePolicy.classify(signals: signals(fullImage: true), ocrCharCount: 1000) == .scannedWithOCRLayer)
+    }
+
+    @Test("Mixed: layer covers < 60% of OCR text")
+    func classifyMixed() {
+        #expect(SourcePolicy.classify(signals: signals(chars: 100), ocrCharCount: 1000) == .mixed)
+    }
+
+    @Test("chooseText: no runs → OCR")
+    func chooseNoRuns() {
+        #expect(SourcePolicy.chooseText(ocr: "hello", ocrConfidence: 0.9,
+                                        layerText: nil, pageClass: .digital) == .ocr)
+    }
+
+    @Test("chooseText: agreeing layer accepted on digital pages")
+    func chooseLayerAccepted() {
+        let choice = SourcePolicy.chooseText(
+            ocr: "Proposals were solicited from ten companies",
+            ocrConfidence: 0.7,
+            layerText: "Proposals were solicited from ten companies.",
+            pageClass: .digital
+        )
+        #expect(choice == .layer("Proposals were solicited from ten companies."))
+    }
+
+    @Test("chooseText: wildly different layer rejected")
+    func chooseLayerRejected() {
+        let choice = SourcePolicy.chooseText(
+            ocr: "WEATHER REPORT",
+            ocrConfidence: 0.9,
+            layerText: "totally unrelated content that came from another region entirely and shares nothing",
+            pageClass: .digital
+        )
+        #expect(choice == .ocr)
+    }
+
+    @Test("chooseText: digit-dense requires 0.85 similarity")
+    func chooseDigitDense() {
+        // Digit swap: 1,492,395 vs 1,492,895 — high sim but the gate protects
+        // only below 0.85; verify a clearly different amount is rejected.
+        let rejected = SourcePolicy.chooseText(
+            ocr: "$1,492,395.00", ocrConfidence: 0.9,
+            layerText: "$8,215,777.99", pageClass: .digital
+        )
+        #expect(rejected == .ocr)
+
+        let escalated = SourcePolicy.chooseText(
+            ocr: "$1,492,395.00", ocrConfidence: 0.3,
+            layerText: "$8,215,777.99", pageClass: .digital
+        )
+        #expect(escalated == .ocrEscalate)
+
+        let accepted = SourcePolicy.chooseText(
+            ocr: "$1,492,395.00", ocrConfidence: 0.9,
+            layerText: "$1,492,395.00", pageClass: .digital
+        )
+        #expect(accepted == .layer("$1,492,395.00"))
+    }
+
+    @Test("chooseText: scannedWithOCRLayer prefers OCR unless strong agreement")
+    func chooseOCRLayerClass() {
+        // Similar but not ≥0.85 → OCR wins on re-OCR'd scans.
+        let choice = SourcePolicy.chooseText(
+            ocr: "CONSTRUCTION FIELD REPORT",
+            ocrConfidence: 0.9,
+            layerText: "CONSTRUCTOIN FIELD REPROT extra words here",
+            pageClass: .scannedWithOCRLayer
+        )
+        #expect(choice == .ocr)
+
+        let agree = SourcePolicy.chooseText(
+            ocr: "CONSTRUCTION FIELD REPORT",
+            ocrConfidence: 0.9,
+            layerText: "CONSTRUCTION FIELD REPORT",
+            pageClass: .scannedWithOCRLayer
+        )
+        #expect(agree == .layer("CONSTRUCTION FIELD REPORT"))
+    }
+
+    @Test("isDigitDense boundary")
+    func digitDense() {
+        #expect(SourcePolicy.isDigitDense("$1,492,395.00"))
+        #expect(SourcePolicy.isDigitDense("RFI #217 12/19/25"))
+        #expect(!SourcePolicy.isDigitDense("Proposals were solicited from ten companies"))
+    }
+}
+
+// MARK: - Text similarity + cleaner (Phase 2)
+
+@Suite("TextSupport")
+struct TextSupportTests {
+
+    @Test("Similarity: identical after normalization")
+    func simIdentical() {
+        #expect(TextSimilarity.similarity("Hello  World", "hello world") == 1.0)
+    }
+
+    @Test("Similarity: distinct strings score low")
+    func simDistinct() {
+        #expect(TextSimilarity.similarity("weather report", "invoice number 12345") < 0.5)
+    }
+
+    @Test("Similarity: minor OCR error scores high")
+    func simOCRError() {
+        #expect(TextSimilarity.similarity("CONSTRUCTION FIELD REPORT", "CONSTRUCTI0N FIELD REP0RT") > 0.85)
+    }
+
+    @Test("Cleaner: ligatures, soft hyphen, nbsp, space runs")
+    func cleanerTransforms() {
+        #expect(TextCleaner.normalize("e\u{FB03}cient") == "efficient")
+        #expect(TextCleaner.normalize("hy\u{00AD}phen") == "hyphen")
+        #expect(TextCleaner.normalize("a\u{00A0}b") == "a b")
+        #expect(TextCleaner.normalize("a   b\tc") == "a b c")
+    }
+
+    @Test("collectRunText joins runs in reading order")
+    func runCollection() {
+        let runs = [
+            PositionedTextRun(text: "right", rect: CGRect(x: 0.5, y: 0.10, width: 0.2, height: 0.02),
+                              fontSize: 12, fontName: "Helvetica", isBold: false, isItalic: false),
+            PositionedTextRun(text: "left", rect: CGRect(x: 0.1, y: 0.10, width: 0.2, height: 0.02),
+                              fontSize: 12, fontName: "Helvetica", isBold: false, isItalic: false),
+            PositionedTextRun(text: "second line", rect: CGRect(x: 0.1, y: 0.14, width: 0.4, height: 0.02),
+                              fontSize: 12, fontName: "Helvetica", isBold: false, isItalic: false),
+            PositionedTextRun(text: "outside", rect: CGRect(x: 0.1, y: 0.8, width: 0.2, height: 0.02),
+                              fontSize: 12, fontName: "Helvetica", isBold: false, isItalic: false),
+        ]
+        let region = CGRect(x: 0.05, y: 0.08, width: 0.7, height: 0.12)
+        let text = MixedSourceReconciler.collectRunText(in: region, runs: runs)
+        #expect(text == "left right\nsecond line")
+    }
+
+    @Test("collectRunText returns nil when no runs match")
+    func runCollectionEmpty() {
+        let runs = [
+            PositionedTextRun(text: "far away", rect: CGRect(x: 0.1, y: 0.9, width: 0.2, height: 0.02),
+                              fontSize: 12, fontName: "Helvetica", isBold: false, isItalic: false),
+        ]
+        let region = CGRect(x: 0.1, y: 0.1, width: 0.3, height: 0.1)
+        #expect(MixedSourceReconciler.collectRunText(in: region, runs: runs) == nil)
+    }
+}
+
 // MARK: - Model tests
 
 @Suite("Model")

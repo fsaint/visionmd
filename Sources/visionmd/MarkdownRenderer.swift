@@ -84,8 +84,9 @@ enum MarkdownRenderer {
     // MARK: Helpers
 
     private static func escapeParagraph(_ text: String) -> String {
-        // Collapse internal newlines within a paragraph to spaces.
-        let collapsed = text
+        // Normalize (NFC, ligatures, soft hyphens, space runs) so layer and OCR
+        // sources produce identical bytes, then collapse newlines to spaces.
+        let collapsed = TextCleaner.normalize(text)
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }

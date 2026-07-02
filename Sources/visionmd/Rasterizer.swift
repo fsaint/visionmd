@@ -122,7 +122,11 @@ enum Rasterizer {
 
         let textLayer = extractTextLayer(pdfPage: pdfPage)
         let fontInfo = PDFStructureExtractor.extractFontInfo(from: pdfPage)
-        verbose("Page \(index + 1): \(w)×\(h) px, text layer \(textLayer?.isEmpty == false ? "present" : "absent")")
+        let runs = PDFStructureExtractor.extractPositionedRuns(from: pdfPage)
+        let signals = PDFStructureExtractor.extractSignals(
+            from: pdfPage, textLayer: textLayer, hasFontInfo: fontInfo != nil
+        )
+        verbose("Page \(index + 1): \(w)×\(h) px, text layer \(textLayer?.isEmpty == false ? "present" : "absent"), \(runs.count) positioned runs")
 
         return RasterizedPage(
             index: index,
@@ -131,7 +135,9 @@ enum Rasterizer {
             pointSize: CGSize(width: mediaBox.width, height: mediaBox.height),
             dpi: CGFloat(dpi),
             pdfTextLayer: textLayer,
-            fontInfo: fontInfo
+            fontInfo: fontInfo,
+            positionedRuns: runs,
+            signals: signals
         )
     }
 

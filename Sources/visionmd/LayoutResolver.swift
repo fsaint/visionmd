@@ -303,59 +303,7 @@ enum LayoutResolver {
     }
 }
 
-// MARK: - Hybrid text-layer reconciler (§5.1)
-
-enum HybridReconciler {
-
-    /// Merge Vision elements with a PDF text layer.
-    ///
-    /// Strategy:
-    ///  - Keep all Vision-detected tables and lists (structure information).
-    ///  - For paragraphs: if the PDF text layer covers the same region with high
-    ///    confidence, replace the Vision transcript with the PDFKit text.
-    ///    (PDFKit text is crisper and correctly encoded; Vision gives better layout.)
-    ///  - The PDFKit text is compared region-by-region; for v0.1 we use the full
-    ///    page text as the paragraph text only when Vision found a single paragraph
-    ///    on the page (simple case). Full reconciliation is deferred to v0.2.
-    static func merge(
-        _ elements: [DocElement],
-        pdfTextLayer: String?
-    ) -> [DocElement] {
-        guard let pdfText = pdfTextLayer, !pdfText.isEmpty else { return elements }
-
-        // Split PDFKit text into approximate paragraphs by double-newline.
-        let pdfParas = pdfText
-            .components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
-        // Count how many Vision paragraphs we have.
-        let visionParas = elements.filter {
-            if case .paragraph = $0 { return true }
-            if case .heading = $0   { return true }
-            return false
-        }
-
-        // Simple reconciliation: if counts roughly match, zip by index.
-        // Otherwise fall back to Vision transcript (reconciliation needs geometry).
-        guard abs(visionParas.count - pdfParas.count) <= 2 else { return elements }
-
-        var pdfIdx = 0
-        return elements.map { el in
-            switch el {
-            case .paragraph(_, let region, let conf):
-                guard pdfIdx < pdfParas.count else { return el }
-                let text = pdfParas[pdfIdx]
-                pdfIdx += 1
-                return .paragraph(text: text, region: region, confidence: conf)
-            case .heading(let lv, _, let region, let conf):
-                guard pdfIdx < pdfParas.count else { return el }
-                let text = pdfParas[pdfIdx]
-                pdfIdx += 1
-                return .heading(level: lv, text: text, region: region, confidence: conf)
-            default:
-                return el
-            }
-        }
-    }
-}
+// HybridReconciler removed in Phase 2 — it zipped PDF-layer paragraphs to
+// Vision regions by index (content-stream order ≠ reading order) and split
+// on "\n\n" which PDFKit almost never emits. Replaced by
+// MixedSourceReconciler (Reconciler.swift) + SourcePolicy (SourcePolicy.swift).

@@ -359,10 +359,9 @@ enum Pipeline {
             tableMode: options.tableMode
         )
 
-        // Hybrid text-layer reconciliation (§5.1)
-        if options.textLayerMode != .off {
-            elements = HybridReconciler.merge(elements, pdfTextLayer: page.pdfTextLayer)
-        }
+        // Mixed-source reconciliation: swap OCR text for PDF-layer text where
+        // the SourcePolicy accepts it (Phase 2).
+        elements = MixedSourceReconciler.reconcile(elements, page: page, mode: options.textLayerMode)
 
         // Stage 5: Figure extraction
         if options.figureMode == .crop {
