@@ -74,6 +74,10 @@ struct VisionMD: AsyncParsableCommand {
           help: "Disable heading inference; emit all text as paragraphs.")
     var noHeadings: Bool = false
 
+    @Flag(name: .customLong("keep-page-furniture"),
+          help: "Keep repeated page headers/footers instead of removing them.")
+    var keepPageFurniture: Bool = false
+
     @Flag(help: "Suppress informational output.")
     var quiet: Bool = false
 
@@ -171,6 +175,11 @@ struct VisionMD: AsyncParsableCommand {
         if results.isEmpty {
             fputs("visionmd: all pages failed\n", stderr)
             throw ExitCode(1)
+        }
+
+        // Document-level refinement: drop repeated page headers/footers.
+        if !keepPageFurniture {
+            results = DocumentRefiner.removePageFurniture(results)
         }
 
         // Stage 6: Assemble Markdown output.

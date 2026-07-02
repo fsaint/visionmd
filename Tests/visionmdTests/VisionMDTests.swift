@@ -198,6 +198,74 @@ struct Phase1FixTests {
     }
 }
 
+// MARK: - Document refinement (Phase 4)
+
+@Suite("DocumentRefiner")
+struct DocumentRefinerTests {
+
+    private func pageResult(_ index: Int, elements: [DocElement]) -> PageResult {
+        PageResult(index: index, pixelSize: CGSize(width: 100, height: 100), elements: elements)
+    }
+
+    private func header(_ text: String, page: Int) -> DocElement {
+        .paragraph(text: text, region: CGRect(x: 0.1, y: 0.03, width: 0.5, height: 0.03), confidence: 0.9)
+    }
+
+    private func body(_ text: String) -> DocElement {
+        .paragraph(text: text, region: CGRect(x: 0.1, y: 0.4, width: 0.6, height: 0.1), confidence: 0.9)
+    }
+
+    @Test("Repeated header removed from all pages")
+    func repeatedHeaderRemoved() {
+        let results = (0..<4).map { i in
+            pageResult(i, elements: [header("ACME Corp — Confidential", page: i), body("page \(i) content")])
+        }
+        let refined = DocumentRefiner.removePageFurniture(results)
+        for page in refined {
+            #expect(page.elements.count == 1)
+            if case .paragraph(let t, _, _) = page.elements[0] {
+                #expect(t.hasPrefix("page"))
+            }
+        }
+    }
+
+    @Test("Numbered footers share a fingerprint and are removed")
+    func numberedFootersRemoved() {
+        let results = (0..<4).map { i in
+            pageResult(i, elements: [
+                body("content \(i)"),
+                .paragraph(text: "Page \(i + 1) of 4",
+                           region: CGRect(x: 0.4, y: 0.95, width: 0.2, height: 0.02), confidence: 0.9),
+            ])
+        }
+        let refined = DocumentRefiner.removePageFurniture(results)
+        for page in refined { #expect(page.elements.count == 1) }
+    }
+
+    @Test("Two-page documents are untouched")
+    func twoPageUntouched() {
+        let results = (0..<2).map { i in
+            pageResult(i, elements: [header("Repeated Header", page: i), body("content")])
+        }
+        let refined = DocumentRefiner.removePageFurniture(results)
+        for page in refined { #expect(page.elements.count == 2) }
+    }
+
+    @Test("Mid-page repeated text is NOT furniture")
+    func midPageRepeatsKept() {
+        // "ACTION" repeats on every page of a field report but sits mid-page.
+        let results = (0..<5).map { i in
+            pageResult(i, elements: [
+                .heading(level: 3, text: "ACTION",
+                         region: CGRect(x: 0.1, y: 0.5, width: 0.3, height: 0.03), confidence: 0.9),
+                body("item \(i)"),
+            ])
+        }
+        let refined = DocumentRefiner.removePageFurniture(results)
+        for page in refined { #expect(page.elements.count == 2) }
+    }
+}
+
 // MARK: - Reading order (Phase 3)
 
 @Suite("ReadingOrder")
