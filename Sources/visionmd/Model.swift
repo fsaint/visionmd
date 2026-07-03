@@ -1,6 +1,14 @@
 import CoreGraphics
 import Foundation
 
+// MARK: - Version
+
+/// Single source of truth for the tool version (CLI --version, front matter,
+/// sidecar `tool` field).
+enum VisionMDVersion {
+    static let string = "0.1"
+}
+
 // MARK: - Pipeline model types
 // All Vision-specific types are converted into these before leaving Recognizer.swift.
 

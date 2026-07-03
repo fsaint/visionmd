@@ -1,6 +1,17 @@
 import ArgumentParser
 import Foundation
 
+// MARK: - CLI enum conformances
+//
+// The mode enums are String-raw CaseIterable (Model.swift); ArgumentParser's
+// RawRepresentable conformance makes invalid values hard errors that list the
+// allowed values in the message.
+
+extension RecognitionLevel: ExpressibleByArgument {}
+extension TextLayerMode: ExpressibleByArgument {}
+extension TableMode: ExpressibleByArgument {}
+extension FigureMode: ExpressibleByArgument {}
+
 // MARK: - Entry point
 
 @main
@@ -8,7 +19,7 @@ struct VisionMD: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "visionmd",
         abstract: "PDF/image → Markdown with tables and figures, via Apple Vision.",
-        version: "0.1"
+        version: VisionMDVersion.string
     )
 
     // MARK: Arguments & options
@@ -28,20 +39,20 @@ struct VisionMD: AsyncParsableCommand {
     @Option(help: "Comma-separated BCP-47 language codes, e.g. en-US,es-ES. Default: auto-detect.")
     var lang: String?
 
-    @Option(help: "Recognition level: fast or accurate. Default: accurate")
-    var level: String = "accurate"
+    @Option(help: "Recognition level (only affects the macOS 15 fallback text path).")
+    var level: RecognitionLevel = .accurate
 
     @Option(help: "Page range, e.g. 1-5,8,11-. Default: all")
     var pages: String?
 
-    @Option(name: .customLong("text-layer"), help: "off | prefer | hybrid. Default: hybrid")
-    var textLayerRaw: String = "hybrid"
+    @Option(name: .customLong("text-layer"), help: "PDF text-layer mode.")
+    var textLayer: TextLayerMode = .hybrid
 
-    @Option(help: "Table mode: native | off. Default: native")
-    var tables: String = "native"
+    @Option(help: "Table mode.")
+    var tables: TableMode = .native
 
-    @Option(help: "Figure mode: crop | off. Default: crop")
-    var figures: String = "crop"
+    @Option(help: "Figure mode.")
+    var figures: FigureMode = .crop
 
     @Option(name: .customLong("min-figure-area"),
             help: "Min fraction of page area for a figure crop. Default: 0.02")
@@ -91,16 +102,8 @@ struct VisionMD: AsyncParsableCommand {
         if quiet   { globalLogLevel = .quiet }
         if verbose { globalLogLevel = .verbose }
 
-        // Validate and parse options
-        let recognitionLevel = parseLevel()
-        let textLayerMode = parseTextLayer()
-        let tableMode = parseTableMode()
-        let figureMode = parseFigureMode()
-        let pageRange = try parsePageRange()
-        let languages = resolvedLanguages()
-
         // OS guard: native table detection requires macOS 26.
-        if tableMode == .native, #unavailable(macOS 26) {
+        if tables == .native, #unavailable(macOS 26) {
             fputs("error: --tables native requires macOS 26 (Tahoe) or later.\n", stderr)
             fputs("       Use --tables off to run on macOS 15, or recompile for macOS 26.\n", stderr)
             throw ExitCode(2)
@@ -116,160 +119,51 @@ struct VisionMD: AsyncParsableCommand {
         log("Input:  \(inputURL.path)")
         log("Output: \(outputURL.path)")
 
-        // Stage 1: Rasterize
-        let rasterized = try Rasterizer.load(input, dpi: dpi, pageRange: pageRange)
-        guard !rasterized.isEmpty else {
-            fputs("visionmd: no pages to process (check --pages range)\n", stderr)
-            throw ExitCode(1)
-        }
-        log("Loaded \(rasterized.count) page(s) at \(Int(dpi)) DPI")
-
-        // Stages 2–5: Process pages concurrently.
-        var results: [PageResult] = []
-        var partialFailure = false
-
-        let opts = ProcessOptions(
-            languages: languages,
-            level: recognitionLevel,
-            textLayerMode: textLayerMode,
-            tableMode: tableMode,
-            figureMode: figureMode,
+        let options = ConversionOptions(
+            dpi: dpi,
+            languages: resolvedLanguages(),
+            level: level,
+            pageRange: try parsePageRange(),
+            textLayerMode: textLayer,
+            tableMode: tables,
+            figureMode: figures,
             minFigureArea: minFigureArea,
-            minConfidence: Float(minConfidence),
-            assetsDirURL: assetsDirURL,
-            hashAssets: hashAssets
-        )
-
-        // Cap concurrent Vision requests: launching too many simultaneously on
-        // large PDFs causes SIGSEGV in CoreAnalytics/CoreGraphics (JBIG2 decoder
-        // state accumulates). 8 concurrent tasks saturates Apple Silicon without
-        // triggering framework crashes.
-        let maxConcurrency = 8
-        results = try await withThrowingTaskGroup(of: PageResult?.self) { group in
-            var iterator = rasterized.makeIterator()
-
-            // Seed up to maxConcurrency initial tasks.
-            for _ in 0..<min(maxConcurrency, rasterized.count) {
-                if let page = iterator.next() {
-                    group.addTask {
-                        do { return try await Pipeline.process(page, options: opts) }
-                        catch { warn("Page \(page.index + 1) failed: \(error) — skipped"); return nil }
-                    }
-                }
-            }
-
-            // Drain: for each finished task, start the next pending page.
-            var collected: [PageResult] = []
-            for try await result in group {
-                if let r = result { collected.append(r) } else { partialFailure = true }
-                if let page = iterator.next() {
-                    group.addTask {
-                        do { return try await Pipeline.process(page, options: opts) }
-                        catch { warn("Page \(page.index + 1) failed: \(error) — skipped"); return nil }
-                    }
-                }
-            }
-            return collected.sorted { $0.index < $1.index }
-        }
-
-        if results.isEmpty {
-            fputs("visionmd: all pages failed\n", stderr)
-            throw ExitCode(1)
-        }
-
-        // Document-level refinement: drop repeated page headers/footers.
-        if !keepPageFurniture {
-            results = DocumentRefiner.removePageFurniture(results)
-        }
-
-        // Stage 6: Assemble Markdown output.
-        // Compute the assets-dir prefix relative to the output .md so figure
-        // links actually resolve (assets default to "<stem>_assets").
-        let assetsPrefix = relativePrefix(from: outputURL.deletingLastPathComponent(),
-                                          to: assetsDirURL)
-        let mdOptions = MarkdownRenderer.Options(
             minConfidence: Float(minConfidence),
             emitHeadings: !noHeadings,
             pageRules: pageRules,
-            assetsPrefix: assetsPrefix
-        )
-        let assemblyOptions = Assembler.Options(
             frontMatter: frontMatter,
-            pageComments: true,
-            pageRules: pageRules,
-            sourceFile: inputURL.lastPathComponent,
-            dpi: dpi
+            keepPageFurniture: keepPageFurniture,
+            hashAssets: hashAssets,
+            outputURL: outputURL,
+            assetsDirURL: assetsDirURL,
+            jsonURL: jsonURL
         )
-        let markdown = Assembler.assembleMarkdown(
-            results: results,
-            markdownOptions: mdOptions,
-            assemblyOptions: assemblyOptions
-        )
+
+        let result: ConversionResult
+        do {
+            result = try await ConversionJob(inputURL: inputURL, options: options).execute()
+        } catch let error as ConversionError {
+            fputs("visionmd: \(error)\n", stderr)
+            throw ExitCode(1)
+        }
 
         // Write Markdown.
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try markdown.write(to: outputURL, atomically: true, encoding: .utf8)
-        log("Markdown written → \(outputURL.path) (\(markdown.utf8.count) bytes)")
+        try result.markdown.write(to: outputURL, atomically: true, encoding: .utf8)
+        log("Markdown written → \(outputURL.path) (\(result.markdown.utf8.count) bytes)")
 
         // Write sidecar JSON (if requested).
         if let jsonDest = jsonURL {
-            let sidecarDoc = Sidecar.build(
-                results: results,
-                source: inputURL.lastPathComponent,
-                dpi: dpi,
-                minConfidence: Float(minConfidence)
-            )
-            try Sidecar.write(sidecarDoc, to: jsonDest)
+            try Sidecar.write(result.sidecar, to: jsonDest)
         }
 
-        if partialFailure { throw ExitCode(3) }
+        if result.partialFailure { throw ExitCode(3) }
     }
 
     // MARK: Option parsing helpers
-
-    private func parseLevel() -> RecognitionLevel {
-        switch level.lowercased() {
-        case "fast":     return .fast
-        case "accurate": return .accurate
-        default:
-            warn("Unknown recognition level '\(level)'; using accurate")
-            return .accurate
-        }
-    }
-
-    private func parseTextLayer() -> TextLayerMode {
-        switch textLayerRaw.lowercased() {
-        case "off":     return .off
-        case "prefer":  return .prefer
-        case "hybrid":  return .hybrid
-        default:
-            warn("Unknown text-layer mode '\(textLayerRaw)'; using hybrid")
-            return .hybrid
-        }
-    }
-
-    private func parseTableMode() -> TableMode {
-        switch tables.lowercased() {
-        case "native": return .native
-        case "off":    return .off
-        default:
-            warn("Unknown table mode '\(tables)'; using native")
-            return .native
-        }
-    }
-
-    private func parseFigureMode() -> FigureMode {
-        switch figures.lowercased() {
-        case "crop": return .crop
-        case "off":  return .off
-        default:
-            warn("Unknown figure mode '\(figures)'; using crop")
-            return .crop
-        }
-    }
 
     private func parsePageRange() throws -> PageRange? {
         guard let p = pages else { return nil }
@@ -302,25 +196,6 @@ struct VisionMD: AsyncParsableCommand {
         }
         return outputURL.deletingLastPathComponent()
                         .appendingPathComponent("\(stem)_assets")
-    }
-
-    /// Relative path prefix from `base` dir to `target` dir ("" when equal,
-    /// "name" when target is a direct child, absolute path as fallback).
-    private func relativePrefix(from base: URL, to target: URL) -> String {
-        let baseComps = base.standardizedFileURL.pathComponents
-        let targetComps = target.standardizedFileURL.pathComponents
-        if baseComps == targetComps { return "" }
-        if targetComps.count == baseComps.count + 1,
-           Array(targetComps.prefix(baseComps.count)) == baseComps {
-            return targetComps.last!
-        }
-        // Not a simple child — build a ../-style relative path.
-        var common = 0
-        while common < min(baseComps.count, targetComps.count),
-              baseComps[common] == targetComps[common] { common += 1 }
-        let ups = Array(repeating: "..", count: baseComps.count - common)
-        let downs = targetComps[common...]
-        return (ups + downs).joined(separator: "/")
     }
 
     private func resolveJsonURL(outputURL: URL, stem: String) -> URL? {

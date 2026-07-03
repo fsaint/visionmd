@@ -64,7 +64,7 @@ enum Sidecar {
         }
         return SidecarDocument(
             source: source,
-            tool: "visionmd/0.1",
+            tool: "visionmd/\(VisionMDVersion.string)",
             dpi: Int(dpi),
             pages: pages
         )

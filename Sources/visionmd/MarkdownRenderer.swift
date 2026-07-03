@@ -277,7 +277,7 @@ enum Assembler {
             out += "---\n"
             out += "source: \(assemblyOptions.sourceFile)\n"
             out += "pages: \(results.count)\n"
-            out += "generated_by: visionmd 0.1\n"
+            out += "generated_by: visionmd \(VisionMDVersion.string)\n"
             out += "dpi: \(Int(assemblyOptions.dpi))\n"
             out += "mean_confidence: \(String(format: "%.2f", meanConf))\n"
             out += "---\n\n"
