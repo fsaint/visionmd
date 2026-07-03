@@ -34,7 +34,8 @@ enum LayoutResolver {
                         TableModel.Cell(
                             row: $0.row, col: $0.col,
                             rowSpan: $0.rowSpan, colSpan: $0.colSpan,
-                            text: $0.text, confidence: $0.confidence
+                            text: $0.text, confidence: $0.confidence,
+                            region: $0.visionBBox.map(Geometry.visionToInternal)
                         )
                     },
                     confidence: rt.confidence

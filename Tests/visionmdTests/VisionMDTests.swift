@@ -198,6 +198,91 @@ struct Phase1FixTests {
     }
 }
 
+// MARK: - Per-cell table reconciliation (Phase 5.1)
+
+@Suite("TableReconciliation")
+struct TableReconciliationTests {
+
+    private func run(_ text: String, at rect: CGRect) -> PositionedTextRun {
+        PositionedTextRun(text: text, rect: rect, fontSize: 11,
+                          fontName: "Helvetica", isBold: false, isItalic: false)
+    }
+
+    private func cell(_ text: String, conf: Float, region: CGRect?) -> TableModel.Cell {
+        TableModel.Cell(row: 0, col: 0, rowSpan: 1, colSpan: 1,
+                        text: text, confidence: conf, region: region)
+    }
+
+    private func page(runs: [PositionedTextRun]) -> RasterizedPage {
+        let ctx = CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8,
+                            bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return RasterizedPage(
+            index: 0, image: ctx.makeImage()!,
+            pixelSize: CGSize(width: 100, height: 100),
+            pointSize: CGSize(width: 612, height: 792), dpi: 300,
+            pdfTextLayer: "layer", fontInfo: nil,
+            positionedRuns: runs,
+            signals: PageSignals(hasTextLayer: true, garbleRatio: 0,
+                                 layerCharCount: 1000, fullPageImage: false,
+                                 hasFontInfo: true)
+        )
+    }
+
+    @Test("Agreeing layer text replaces OCR cell text byte-exact")
+    func layerReplacesCellText() {
+        let cellRect = CGRect(x: 0.1, y: 0.2, width: 0.2, height: 0.04)
+        let model = TableModel(rowCount: 1, colCount: 1,
+                               cells: [cell("Concrete rnix", conf: 0.8, region: cellRect)],
+                               confidence: 0.8)
+        let p = page(runs: [run("Concrete mix", at: cellRect.insetBy(dx: 0.01, dy: 0.005))])
+        let out = MixedSourceReconciler.reconcileTable(model, page: p, pageClass: .digital, thresholds: .hybrid)
+        #expect(out.cells[0].text == "Concrete mix")
+        #expect(out.cells[0].confidence >= 0.99)
+        #expect(!out.cells[0].escalated)
+    }
+
+    @Test("Digit disagreement at low confidence escalates the cell")
+    func digitDisagreementEscalates() {
+        let cellRect = CGRect(x: 0.6, y: 0.2, width: 0.15, height: 0.04)
+        let model = TableModel(rowCount: 1, colCount: 1,
+                               cells: [cell("$1,204.50", conf: 0.3, region: cellRect)],
+                               confidence: 0.3)
+        // Layer disagrees on digits → digit-dense gate rejects; conf < 0.5 → escalate.
+        let p = page(runs: [run("$8,777.99", at: cellRect.insetBy(dx: 0.01, dy: 0.005))])
+        let out = MixedSourceReconciler.reconcileTable(model, page: p, pageClass: .digital, thresholds: .hybrid)
+        #expect(out.cells[0].text == "$1,204.50")   // OCR kept
+        #expect(out.cells[0].escalated)
+        #expect(out.escalatedCells == [[0, 0]])
+        #expect(out.hasEscalatedCells)
+    }
+
+    @Test("Cell without region passes through untouched")
+    func noRegionPassthrough() {
+        let model = TableModel(rowCount: 1, colCount: 1,
+                               cells: [cell("as-is", conf: 0.7, region: nil)],
+                               confidence: 0.7)
+        let p = page(runs: [run("something else", at: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.04))])
+        let out = MixedSourceReconciler.reconcileTable(model, page: p, pageClass: .digital, thresholds: .hybrid)
+        #expect(out.cells[0].text == "as-is")
+        #expect(!out.cells[0].escalated)
+    }
+
+    @Test("Adjacent cell runs do not bleed at cell tolerance")
+    func noAdjacentCellBleed() {
+        // Two side-by-side cells; the run for the neighbor sits 0.004 outside
+        // this cell — inside paragraph tolerance (0.005) but outside cell
+        // tolerance (0.002).
+        let cellRect = CGRect(x: 0.10, y: 0.2, width: 0.20, height: 0.04)
+        let neighborRun = run("NEIGHBOR", at: CGRect(x: 0.304, y: 0.2, width: 0.05, height: 0.04))
+        let ownRun = run("OWN TEXT", at: cellRect.insetBy(dx: 0.02, dy: 0.005))
+        let text = MixedSourceReconciler.collectRunText(in: cellRect,
+                                                        runs: [ownRun, neighborRun],
+                                                        tolerance: 0.002)
+        #expect(text == "OWN TEXT")
+    }
+}
+
 // MARK: - Heading-row demotion
 
 @Suite("HeadingRows")

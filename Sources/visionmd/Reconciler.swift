@@ -54,10 +54,64 @@ enum MixedSourceReconciler {
                     return el
                 }
 
+            case .table(let model, let region, let conf):
+                let reconciled = reconcileTable(model, page: page,
+                                                pageClass: pageClass, thresholds: thresholds)
+                return .table(reconciled, region: region, confidence: conf)
+
             default:
                 return el
             }
         }
+    }
+
+    /// Per-cell mixed-source text (Phase 5.1). Digit-dense cells are gated at
+    /// 0.85 similarity by SourcePolicy; a rejected layer + low OCR confidence
+    /// marks the cell `escalated` for the sidecar.
+    static func reconcileTable(
+        _ model: TableModel,
+        page: RasterizedPage,
+        pageClass: PageClass,
+        thresholds: SourcePolicy.Thresholds
+    ) -> TableModel {
+        let newCells = model.cells.map { cell -> TableModel.Cell in
+            guard let cellRect = cell.region else { return cell }
+            // Tight tolerance at cell scale: the paragraph default (0.005)
+            // bleeds runs across adjacent cells.
+            let layerText = collectRunText(in: cellRect, runs: page.positionedRuns,
+                                           tolerance: 0.002)
+            let choice = SourcePolicy.chooseText(
+                ocr: cell.text,
+                ocrConfidence: cell.confidence,
+                layerText: layerText,
+                pageClass: pageClass,
+                thresholds: thresholds
+            )
+            switch choice {
+            case .layer(let text):
+                return TableModel.Cell(
+                    row: cell.row, col: cell.col,
+                    rowSpan: cell.rowSpan, colSpan: cell.colSpan,
+                    text: text, confidence: max(cell.confidence, 0.99),
+                    region: cell.region
+                )
+            case .ocr:
+                return cell
+            case .ocrEscalate:
+                return TableModel.Cell(
+                    row: cell.row, col: cell.col,
+                    rowSpan: cell.rowSpan, colSpan: cell.colSpan,
+                    text: cell.text, confidence: cell.confidence,
+                    region: cell.region, escalated: true
+                )
+            }
+        }
+        return TableModel(
+            rowCount: model.rowCount,
+            colCount: model.colCount,
+            cells: newCells,
+            confidence: model.confidence
+        )
     }
 
     // MARK: Region text assembly
@@ -84,11 +138,15 @@ enum MixedSourceReconciler {
         return choice
     }
 
-    /// Collect layer runs whose center falls inside `region` (±0.5% tolerance),
-    /// sort into reading order (top→bottom, left→right), join, and normalize.
+    /// Collect layer runs whose center falls inside `region` (±0.5% tolerance
+    /// by default; tighter for table cells), sort into reading order
+    /// (top→bottom, left→right), join, and normalize.
     /// Returns nil when no runs match.
-    static func collectRunText(in region: CGRect, runs: [PositionedTextRun]) -> String? {
-        let tolerance: CGFloat = 0.005
+    static func collectRunText(
+        in region: CGRect,
+        runs: [PositionedTextRun],
+        tolerance: CGFloat = 0.005
+    ) -> String? {
         let expanded = region.insetBy(dx: -tolerance, dy: -tolerance)
 
         var matched = runs.filter { expanded.contains($0.rect.center) }

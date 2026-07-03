@@ -12,7 +12,12 @@ import Foundation
 enum TextChoice: Equatable, Sendable {
     case layer(String)   // use this PDF-layer text
     case ocr             // keep the Vision transcript
-    case ocrEscalate     // keep OCR but flag for re-OCR in the sidecar
+    /// Keep OCR but flag for re-OCR. Only fires when ocrConfidence < 0.5.
+    /// Table cells carry this as Cell.escalated → sidecar escalated_cells.
+    /// For paragraphs/headings the sidecar already emits escalate:true for
+    /// anything below --min-confidence (default 0.5), so no extra plumbing —
+    /// the signal is only lost if the user lowers --min-confidence below 0.5.
+    case ocrEscalate
 }
 
 enum SourcePolicy {

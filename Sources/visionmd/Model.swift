@@ -67,10 +67,25 @@ struct TableModel: Sendable {
         let colSpan: Int
         let text: String
         let confidence: Float
+        /// Cell rect in internal-normalized (top-left) space; nil when Vision
+        /// provided no per-cell geometry.
+        var region: CGRect? = nil
+        /// True when the source policy rejected the layer text AND OCR
+        /// confidence was low — flag for re-OCR in the sidecar.
+        var escalated: Bool = false
     }
 
     var hasMerges: Bool {
         cells.contains { $0.rowSpan > 1 || $0.colSpan > 1 }
+    }
+
+    /// [row, col] pairs of cells flagged for re-OCR.
+    var escalatedCells: [[Int]] {
+        cells.filter(\.escalated).map { [$0.row, $0.col] }
+    }
+
+    var hasEscalatedCells: Bool {
+        cells.contains(where: \.escalated)
     }
 
     /// Returns a dense row-major 2-D grid filled with cell text.
@@ -202,6 +217,10 @@ struct RawTable: Sendable {
         let colSpan: Int
         let text: String
         let confidence: Float
+        /// Cell content rect in Vision space (page-normalized, bottom-left
+        /// origin — verified: cell.content.boundingRegion is page-relative,
+        /// not table-local). nil when unavailable.
+        var visionBBox: CGRect? = nil
     }
 }
 

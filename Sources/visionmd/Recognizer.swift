@@ -77,13 +77,18 @@ enum Recognizer {
                 for cell in row {
                     let cellText = cell.content.text.transcript
                     let cellConf = averageConfidence(cell.content.paragraphs.flatMap(\.lines))
+                    // Verified: cell.content.boundingRegion is PAGE-normalized
+                    // Vision space (same space as the table's own region), not
+                    // table-local.
+                    let cellBBox = cell.content.boundingRegion.boundingBox.cgRect
                     rawCells.append(RawTable.RawCell(
                         row:     cell.rowRange.lowerBound,
                         col:     cell.columnRange.lowerBound,
                         rowSpan: cell.rowRange.count,
                         colSpan: cell.columnRange.count,
                         text:    cellText,
-                        confidence: cellConf
+                        confidence: cellConf,
+                        visionBBox: cellBBox
                     ))
                 }
             }

@@ -39,6 +39,9 @@ struct SidecarElement: Codable, Sendable {
     let mdAnchor: String?
     let asset: String?
     let escalate: Bool
+    /// [row, col] pairs of table cells whose layer text was rejected at low
+    /// OCR confidence (present only when non-empty).
+    var escalatedCells: [[Int]]? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, type
@@ -46,6 +49,7 @@ struct SidecarElement: Codable, Sendable {
         case confidence, rows, cols, complex, split
         case mdAnchor = "md_anchor"
         case asset, escalate
+        case escalatedCells = "escalated_cells"
     }
 }
 
@@ -88,7 +92,7 @@ enum Sidecar {
                 tableCount += 1
                 let id = "t_p\(pageIdx)_\(tableCount)"
                 let isComplex = model.hasMerges
-                let escalate = conf < minConfidence || isComplex
+                let escalate = conf < minConfidence || isComplex || model.hasEscalatedCells
                 let anchor = isComplex ? "<!-- visionmd:complex-table id=\(id) -->" : nil
                 return SidecarElement(
                     id: id,
@@ -101,7 +105,8 @@ enum Sidecar {
                     split: nil,
                     mdAnchor: anchor,
                     asset: nil,
-                    escalate: escalate
+                    escalate: escalate,
+                    escalatedCells: model.hasEscalatedCells ? model.escalatedCells : nil
                 )
 
             case .figure(let path, _, _):
