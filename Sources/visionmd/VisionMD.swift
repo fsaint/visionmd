@@ -247,6 +247,9 @@ enum Pipeline {
         // the SourcePolicy accepts it (Phase 2).
         elements = MixedSourceReconciler.reconcile(elements, page: page, mode: options.textLayerMode)
 
+        // Table header detection (Phase 5.2) — needs reconciled cell text.
+        elements = TableRefiner.refineHeaders(elements, page: page)
+
         // Stage 5: Figure extraction
         if options.figureMode == .crop {
             let occupied = elements.map(\.region)

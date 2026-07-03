@@ -59,6 +59,8 @@ struct TableModel: Sendable {
     let colCount: Int
     let cells: [Cell]
     let confidence: Float
+    /// False when row 0 is data, not a header (TableRefiner.detectHeader).
+    var headerDetected: Bool = true
 
     struct Cell: Sendable {
         let row: Int

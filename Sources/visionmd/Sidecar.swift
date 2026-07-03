@@ -42,6 +42,8 @@ struct SidecarElement: Codable, Sendable {
     /// [row, col] pairs of table cells whose layer text was rejected at low
     /// OCR confidence (present only when non-empty).
     var escalatedCells: [[Int]]? = nil
+    /// Present (false) only when row 0 was NOT detected as a header.
+    var headerDetected: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, type
@@ -50,6 +52,7 @@ struct SidecarElement: Codable, Sendable {
         case mdAnchor = "md_anchor"
         case asset, escalate
         case escalatedCells = "escalated_cells"
+        case headerDetected = "header_detected"
     }
 }
 
@@ -106,7 +109,8 @@ enum Sidecar {
                     mdAnchor: anchor,
                     asset: nil,
                     escalate: escalate,
-                    escalatedCells: model.hasEscalatedCells ? model.escalatedCells : nil
+                    escalatedCells: model.hasEscalatedCells ? model.escalatedCells : nil,
+                    headerDetected: model.headerDetected ? nil : false
                 )
 
             case .figure(let path, _, _):

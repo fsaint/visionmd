@@ -283,6 +283,90 @@ struct TableReconciliationTests {
     }
 }
 
+// MARK: - Table header detection (Phase 5.2)
+
+@Suite("TableHeaderDetection")
+struct TableHeaderDetectionTests {
+
+    private func makeTable(_ grid: [[String]], regions: Bool = false) -> TableModel {
+        var cells: [TableModel.Cell] = []
+        for (r, row) in grid.enumerated() {
+            for (c, text) in row.enumerated() {
+                let region = regions
+                    ? CGRect(x: 0.1 + CGFloat(c) * 0.2, y: 0.2 + CGFloat(r) * 0.05,
+                             width: 0.18, height: 0.04)
+                    : nil
+                cells.append(TableModel.Cell(row: r, col: c, rowSpan: 1, colSpan: 1,
+                                             text: text, confidence: 0.9, region: region))
+            }
+        }
+        return TableModel(rowCount: grid.count, colCount: grid[0].count,
+                          cells: cells, confidence: 0.9)
+    }
+
+    @Test("Bold row 0 detected as header via font rule")
+    func boldHeaderDetected() {
+        let table = makeTable([["Item", "Amount"], ["Widget", "42.50"]], regions: true)
+        // Bold runs covering row-0 cell centers.
+        let runs = [
+            PositionedTextRun(text: "Item", rect: CGRect(x: 0.12, y: 0.21, width: 0.1, height: 0.02),
+                              fontSize: 11, fontName: "Helvetica-Bold", isBold: true, isItalic: false),
+            PositionedTextRun(text: "Amount", rect: CGRect(x: 0.32, y: 0.21, width: 0.1, height: 0.02),
+                              fontSize: 11, fontName: "Helvetica-Bold", isBold: true, isItalic: false),
+        ]
+        #expect(TableRefiner.detectHeader(table, runs: runs, bodyFontSize: 11))
+    }
+
+    @Test("Numeric row 0 means no header")
+    func numericGridNoHeader() {
+        let table = makeTable([["1.5", "2.7"], ["3.1", "4.9"], ["5.0", "6.2"]])
+        #expect(!TableRefiner.detectHeader(table, runs: [], bodyFontSize: nil))
+    }
+
+    @Test("Non-numeric row 0 over numeric data is a header (scanned)")
+    func numericShapeHeader() {
+        let table = makeTable([["Item", "Amount"], ["Widget", "42.50"], ["Bolt", "3.20"]])
+        #expect(TableRefiner.detectHeader(table, runs: [], bodyFontSize: nil))
+    }
+
+    @Test("Single-row table has no header")
+    func singleRowNoHeader() {
+        let table = makeTable([["only", "row"]])
+        #expect(!TableRefiner.detectHeader(table, runs: [], bodyFontSize: nil))
+    }
+
+    @Test("Headerless table renders empty GFM header and keeps row 0 as data")
+    func headerlessRendering() {
+        var table = makeTable([["1.5", "2.7"], ["3.1", "4.9"]])
+        table.headerDetected = false
+        let opts = MarkdownRenderer.Options(minConfidence: 0.5, emitHeadings: true, pageRules: false)
+        let md = MarkdownRenderer.renderElement(
+            .table(table, region: CGRect(x: 0, y: 0, width: 0.5, height: 0.2), confidence: 0.9),
+            pageIndex: 0, options: opts
+        )
+        let lines = md.components(separatedBy: "\n").filter { !$0.isEmpty }
+        #expect(lines[0].replacingOccurrences(of: " ", with: "") == "|||")   // empty header
+        #expect(lines.count == 4)   // header + separator + 2 data rows (row 0 kept)
+        #expect(lines[2].contains("1.5"))
+    }
+
+    @Test("Sidecar carries header_detected only when false")
+    func sidecarHeaderFlag() {
+        var headerless = makeTable([["1.5", "2.7"], ["3.1", "4.9"]])
+        headerless.headerDetected = false
+        let headered = makeTable([["Item", "Amount"], ["Widget", "42.50"]])
+
+        let result = PageResult(index: 0, pixelSize: CGSize(width: 100, height: 100), elements: [
+            .table(headerless, region: CGRect(x: 0, y: 0, width: 0.5, height: 0.2), confidence: 0.9),
+            .table(headered, region: CGRect(x: 0, y: 0.5, width: 0.5, height: 0.2), confidence: 0.9),
+        ])
+        let doc = Sidecar.build(results: [result], source: "t.pdf", dpi: 300, minConfidence: 0.5)
+        let tables = doc.pages[0].elements.filter { $0.type == "table" }
+        #expect(tables[0].headerDetected == false)
+        #expect(tables[1].headerDetected == nil)
+    }
+}
+
 // MARK: - Heading-row demotion
 
 @Suite("HeadingRows")

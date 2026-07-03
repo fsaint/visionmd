@@ -154,24 +154,30 @@ enum TableRenderer {
         guard t.rowCount > 0, t.colCount > 0 else { return "" }
         let grid = t.denseGrid()
 
+        // Data rows: all rows when no header was detected (GFM still requires
+        // a header line, so an empty one is emitted), else rows 1+.
+        let dataRows = t.headerDetected ? Array(grid.dropFirst()) : grid
+
         // Detect numeric columns for right-alignment: every non-empty cell is
         // numeric AND at least one non-empty numeric cell exists (all-empty
         // columns must not right-align).
         var numericCol = Array(repeating: true, count: t.colCount)
         var hasNumeric = Array(repeating: false, count: t.colCount)
-        for row in grid.dropFirst() {
+        for row in dataRows {
             for (c, cell) in row.enumerated() where c < t.colCount {
                 let trimmed = cell.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty else { continue }
-                if isNumeric(trimmed) { hasNumeric[c] = true } else { numericCol[c] = false }
+                if TableRefiner.isNumeric(trimmed) { hasNumeric[c] = true } else { numericCol[c] = false }
             }
         }
         for c in 0..<t.colCount where !hasNumeric[c] { numericCol[c] = false }
 
         var lines: [String] = []
 
-        // Header row (row 0)
-        let header = grid.first ?? Array(repeating: "", count: t.colCount)
+        // Header row: row 0 when detected, empty otherwise.
+        let header = t.headerDetected
+            ? (grid.first ?? Array(repeating: "", count: t.colCount))
+            : Array(repeating: "", count: t.colCount)
         lines.append("| " + header.map(escapeCell).joined(separator: " | ") + " |")
 
         // Separator row
@@ -179,7 +185,7 @@ enum TableRenderer {
         lines.append("| " + sep.joined(separator: " | ") + " |")
 
         // Data rows
-        for row in grid.dropFirst() {
+        for row in dataRows {
             // Pad or truncate to colCount
             var cells = row
             while cells.count < t.colCount { cells.append("") }
@@ -206,7 +212,7 @@ enum TableRenderer {
                 if let cell = t.cells.first(where: { $0.row == r && $0.col == c }) {
                     let rs = cell.rowSpan > 1 ? " rowspan=\"\(cell.rowSpan)\"" : ""
                     let cs = cell.colSpan > 1 ? " colspan=\"\(cell.colSpan)\"" : ""
-                    let tag = r == 0 ? "th" : "td"
+                    let tag = (r == 0 && t.headerDetected) ? "th" : "td"
                     let text = escapeHTML(cell.text)
                         .replacingOccurrences(of: "\n", with: "<br>")
                     html += "    <\(tag)\(rs)\(cs)>\(text)</\(tag)>\n"
@@ -245,11 +251,8 @@ enum TableRenderer {
          .replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    private static func isNumeric(_ s: String) -> Bool {
-        let t = s.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty else { return false }
-        return Double(t.filter { $0 != "," && $0 != "%" && $0 != "$" }) != nil
-    }
+    // isNumeric moved to TableRefiner so header detection and column
+    // alignment share one definition of "numeric".
 }
 
 // MARK: - Output assembly
