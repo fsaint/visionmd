@@ -45,10 +45,16 @@ enum LayoutResolver {
             }
         }
 
-        // Paragraphs — skip any fully inside a table region.
+        // Paragraphs — skip any fully inside a table region, and drop OCR
+        // speckle (tiny garbage fragments) before it can distort column
+        // detection, banding, furniture fingerprints, or the sidecar.
         for rp in raw.paragraphs {
             let region = Geometry.visionToInternal(rp.visionBBox)
             guard !isInsideTable(region, tables: tableRects) else { continue }
+            guard !isTinyFragment(text: rp.text, confidence: rp.confidence) else {
+                verbose("Page \(page.index + 1): dropped speckle '\(rp.text.prefix(12))' (conf \(rp.confidence))")
+                continue
+            }
             let elem = classifyParagraph(text: rp.text, region: region, confidence: rp.confidence, lineCount: rp.lineCount, page: page)
             elements.append(elem)
         }
@@ -339,6 +345,26 @@ enum LayoutResolver {
             return .heading(level: l, text: trimmed, region: region, confidence: confidence)
         }
         return .paragraph(text: text, region: region, confidence: confidence)
+    }
+
+    /// OCR speckle: standalone paragraph fragments too small/garbled to be
+    /// content. `(len < 4 && letterFraction < 0.5) || (conf < 0.3 && len < 10)`
+    /// where len is post-trim and letterFraction is over non-whitespace chars.
+    /// Never applied to list items or table cells.
+    static func isTinyFragment(text: String, confidence: Float) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = trimmed.count
+        if n == 0 { return true }
+
+        if n < 4 {
+            let nonWS = trimmed.filter { !$0.isWhitespace }
+            let letters = nonWS.filter { $0.isLetter }
+            if nonWS.isEmpty || Float(letters.count) / Float(nonWS.count) < 0.5 {
+                return true
+            }
+        }
+        if confidence < 0.3 && n < 10 { return true }
+        return false
     }
 
     /// Returns true when text is clearly not a heading — used by both the

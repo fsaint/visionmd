@@ -213,7 +213,7 @@ enum TableRenderer {
                     let rs = cell.rowSpan > 1 ? " rowspan=\"\(cell.rowSpan)\"" : ""
                     let cs = cell.colSpan > 1 ? " colspan=\"\(cell.colSpan)\"" : ""
                     let tag = (r == 0 && t.headerDetected) ? "th" : "td"
-                    let text = escapeHTML(cell.text)
+                    let text = escapeHTML(TextCleaner.normalize(cell.text))
                         .replacingOccurrences(of: "\n", with: "<br>")
                     html += "    <\(tag)\(rs)\(cs)>\(text)</\(tag)>\n"
 
@@ -236,12 +236,13 @@ enum TableRenderer {
     // MARK: Helpers
 
     static func escapeCell(_ s: String) -> String {
-        // Escape HTML entities FIRST, then insert <br> (order matters — the
-        // reverse destroys our own tags, producing literal &lt;br&gt;).
-        escapeHTML(s)
+        // Normalize first (NFC, ligatures, soft hyphens, space collapse —
+        // newlines survive so <br> still works), then escape HTML entities,
+        // THEN insert <br> (the reverse destroys our own tags, producing
+        // literal &lt;br&gt;).
+        escapeHTML(TextCleaner.normalize(s))
             .replacingOccurrences(of: "|", with: "\\|")
             .replacingOccurrences(of: "\n", with: "<br>")
-            .trimmingCharacters(in: .whitespaces)
     }
 
     /// Escape &, <, > — & first so we don't double-escape our own entities.

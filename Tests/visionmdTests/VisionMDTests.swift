@@ -283,6 +283,33 @@ struct TableReconciliationTests {
     }
 }
 
+// MARK: - Tiny-fragment (speckle) filter
+
+@Suite("TinyFragment")
+struct TinyFragmentTests {
+
+    @Test("Speckle dropped, real short words kept")
+    func speckleBoundaries() {
+        // Kept: 3 letters, 100% alpha.
+        #expect(!LayoutResolver.isTinyFragment(text: "Yes", confidence: 0.9))
+        // Dropped: short with symbols/digits.
+        #expect(LayoutResolver.isTinyFragment(text: "€4", confidence: 0.9))
+        #expect(LayoutResolver.isTinyFragment(text: "|", confidence: 0.9))
+        #expect(LayoutResolver.isTinyFragment(text: ".", confidence: 0.9))
+        #expect(LayoutResolver.isTinyFragment(text: "××", confidence: 0.9))
+        // Confidence rule: 9 chars at conf 0.29 dropped, at 0.31 kept.
+        #expect(LayoutResolver.isTinyFragment(text: "lral te x", confidence: 0.29))
+        #expect(!LayoutResolver.isTinyFragment(text: "lral te x", confidence: 0.31))
+        // Longer garbled text survives the filter (flagged low-conf instead).
+        #expect(!LayoutResolver.isTinyFragment(text: "Masary RepsinPer", confidence: 0.2))
+    }
+
+    @Test("Cell text is normalized (ligatures, nbsp)")
+    func cellNormalization() {
+        #expect(TableRenderer.escapeCell("e\u{FB03}cient\u{00A0}x") == "efficient x")
+    }
+}
+
 // MARK: - Table header detection (Phase 5.2)
 
 @Suite("TableHeaderDetection")
