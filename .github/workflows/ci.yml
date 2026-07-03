@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # macOS 26 (Tahoe) required: the package platform floor is macOS 26 and
+    # Vision's RecognizeDocumentsRequest only exists there. Do NOT use
+    # macos-latest (currently macOS 15).
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26*.app 2>/dev/null || true
+          swift --version
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        # If Vision model assets are missing in the VM image, the VisionGate
+        # probe auto-skips Vision-dependent tests. To force-skip them,
+        # uncomment the env below.
+        # env:
+        #   VISIONMD_SKIP_VISION: "1"
+        run: swift test
