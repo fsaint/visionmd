@@ -17,6 +17,7 @@ func usage() -> Never {
     fputs("""
     Usage: vmdpreview <input.pdf> [input.md]
            vmdpreview --samples [<doc-type>]
+           vmdpreview --all
            vmdpreview --list
 
     Options:
@@ -24,6 +25,8 @@ func usage() -> Never {
       --samples [<type>]      Open a sample doc (bulletin, contract, daily_report,
                               drawing_sheet, drawings, four_wla, observations,
                               pay_application, rfi, spec, submittal)
+      --all                   Generate previews for EVERY sample doc and open
+                              a gallery index page linking to them
       --list                  List available sample docs
 
     If input.md is omitted, <input-stem>.md is tried automatically.
@@ -106,10 +109,13 @@ func openSample(type: String?) {
     }
 }
 
-func openPair(pdfURL: URL, mdURL: URL) {
+/// Generate a preview directory (doc.pdf + index.html) for one PDF/MD pair.
+/// Returns the index.html URL, or nil when the PDF is missing.
+@discardableResult
+func generatePair(pdfURL: URL, mdURL: URL, into previewDir: URL) -> URL? {
     guard FileManager.default.fileExists(atPath: pdfURL.path) else {
         fputs("PDF not found: \(pdfURL.path)\n", stderr)
-        exit(1)
+        return nil
     }
     var mdContent = ""
     if FileManager.default.fileExists(atPath: mdURL.path),
@@ -119,8 +125,6 @@ func openPair(pdfURL: URL, mdURL: URL) {
         mdContent = "> **No Markdown file found.** Run `visionmd \"\(pdfURL.lastPathComponent)\"` first."
         fputs("Warning: \(mdURL.lastPathComponent) not found — showing placeholder.\n", stderr)
     }
-    let previewDir = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("vmdpreview-\(pdfURL.deletingPathExtension().lastPathComponent)")
     try? FileManager.default.createDirectory(at: previewDir, withIntermediateDirectories: true)
     let pdfDest = previewDir.appendingPathComponent("doc.pdf")
     try? FileManager.default.removeItem(at: pdfDest)
@@ -128,9 +132,139 @@ func openPair(pdfURL: URL, mdURL: URL) {
     let htmlDest = previewDir.appendingPathComponent("index.html")
     let html = buildHTML(title: pdfURL.deletingPathExtension().lastPathComponent, markdown: mdContent)
     try? html.write(to: htmlDest, atomically: true, encoding: .utf8)
+    return htmlDest
+}
+
+func openPair(pdfURL: URL, mdURL: URL) {
+    let previewDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vmdpreview-\(pdfURL.deletingPathExtension().lastPathComponent)")
+    guard let htmlDest = generatePair(pdfURL: pdfURL, mdURL: mdURL, into: previewDir) else {
+        exit(1)
+    }
     NSWorkspace.shared.open(htmlDest)
     print("Preview: \(htmlDest.path)")
     exit(0)
+}
+
+// MARK: - Gallery mode (--all)
+
+/// Generate previews for every sample doc plus an index page, open the index.
+func openAll() {
+    guard let dir = sampleDir() else {
+        fputs("sample_pdfs/ not found.\n", stderr)
+        exit(1)
+    }
+    let outDir = dir.deletingLastPathComponent().appendingPathComponent("sample_output")
+    let allPDFs = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+        .filter { $0.pathExtension.lowercased() == "pdf" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+    guard !allPDFs.isEmpty else {
+        fputs("No PDFs in \(dir.path).\n", stderr)
+        exit(1)
+    }
+
+    let galleryDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vmdpreview-gallery")
+    try? FileManager.default.createDirectory(at: galleryDir, withIntermediateDirectories: true)
+
+    struct Entry {
+        let stem: String
+        let docType: String
+        let relHref: String
+        let words: Int
+        let headings: Int
+        let warnings: Int
+        let hasMD: Bool
+    }
+
+    var entries: [Entry] = []
+    for (i, pdf) in allPDFs.enumerated() {
+        let stem = pdf.deletingPathExtension().lastPathComponent
+        let md = outDir.appendingPathComponent(stem + ".md")
+        // Directory-safe name: index avoids collisions from odd characters.
+        let subdir = galleryDir.appendingPathComponent("doc-\(i)")
+        guard generatePair(pdfURL: pdf, mdURL: md, into: subdir) != nil else { continue }
+
+        var words = 0, headings = 0, warnings = 0, hasMD = false
+        if let text = try? String(contentsOf: md, encoding: .utf8) {
+            hasMD = true
+            words = text.split(whereSeparator: \.isWhitespace).count
+            for line in text.components(separatedBy: "\n") {
+                if line.hasPrefix("#") { headings += 1 }
+                if line.contains("Low-confidence") { warnings += 1 }
+            }
+        }
+        entries.append(Entry(
+            stem: stem,
+            docType: stem.components(separatedBy: "__").first ?? "other",
+            relHref: "doc-\(i)/index.html",
+            words: words, headings: headings, warnings: warnings, hasMD: hasMD
+        ))
+        print("✓ \(stem)")
+    }
+
+    // Build the index page, grouped by doc type.
+    var rows = ""
+    let grouped = Dictionary(grouping: entries, by: \.docType).sorted { $0.key < $1.key }
+    for (docType, docs) in grouped {
+        rows += "<h2>\(escapeHTMLText(docType)) <span class=\"count\">\(docs.count)</span></h2>\n<ul>\n"
+        for e in docs.sorted(by: { $0.stem < $1.stem }) {
+            let title = e.stem.replacingOccurrences(of: "\(e.docType)__", with: "")
+            let stats = e.hasMD
+                ? "\(e.words.formatted()) words · \(e.headings) headings · \(e.warnings) ⚠️"
+                : "no markdown"
+            rows += """
+              <li><a href="\(e.relHref)">\(escapeHTMLText(title))</a>
+                  <span class="stats">\(stats)</span></li>\n
+            """
+        }
+        rows += "</ul>\n"
+    }
+
+    let indexHTML = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <title>visionmd — sample gallery</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+             max-width: 860px; margin: 2rem auto; padding: 0 1rem;
+             color: #1f2328; line-height: 1.5; }
+      h1 { font-size: 1.5rem; }
+      h1 .sub { font-size: .9rem; font-weight: 400; color: #57606a; }
+      h2 { font-size: 1.05rem; margin: 1.5em 0 .4em; text-transform: uppercase;
+           letter-spacing: .04em; color: #57606a;
+           border-bottom: 1px solid #d0d7de; padding-bottom: .25em; }
+      h2 .count { font-weight: 400; color: #8b949e; font-size: .85em; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li { display: flex; justify-content: space-between; align-items: baseline;
+           gap: 1rem; padding: .35em .5em; border-radius: 6px; }
+      li:hover { background: #f6f8fa; }
+      a { color: #0969da; text-decoration: none; font-size: .95rem;
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      a:hover { text-decoration: underline; }
+      .stats { color: #8b949e; font-size: .8rem; white-space: nowrap; }
+    </style>
+    </head>
+    <body>
+    <h1>visionmd sample gallery <span class="sub">— \(entries.count) documents, PDF vs Markdown side by side</span></h1>
+    \(rows)
+    </body>
+    </html>
+    """
+
+    let indexDest = galleryDir.appendingPathComponent("index.html")
+    try? indexHTML.write(to: indexDest, atomically: true, encoding: .utf8)
+    NSWorkspace.shared.open(indexDest)
+    print("Gallery: \(indexDest.path)")
+    exit(0)
+}
+
+func escapeHTMLText(_ s: String) -> String {
+    s.replacingOccurrences(of: "&", with: "&amp;")
+     .replacingOccurrences(of: "<", with: "&lt;")
+     .replacingOccurrences(of: ">", with: "&gt;")
 }
 
 // MARK: - Dispatch
@@ -138,6 +272,11 @@ func openPair(pdfURL: URL, mdURL: URL) {
 if cliArgs.contains("--list") {
     listSamples()
     exit(0)
+}
+
+if cliArgs.contains("--all") {
+    openAll()
+    // openAll exits internally
 }
 
 if cliArgs.contains("--samples") {
